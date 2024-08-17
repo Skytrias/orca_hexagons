@@ -1,6 +1,7 @@
 package hex
 
 import "core:math"
+import "core:math/rand"
 
 Point :: [2]f32
 Hex :: [3]int // q r s
@@ -72,6 +73,26 @@ hex_direction :: proc(direction: int) -> Hex {
 	return hex_direction(direction)
 }
 
+hex_center_direction :: proc(a: Hex) -> Hex {
+	center := Hex{}
+	return {center.x - a.x, center.y - a.y, center.z - a.z}
+}
+
+closest_direction :: proc(diff: Hex) -> Hex {
+	closest := hex_directions[0]
+	min_dist := hex_distance(diff, closest)
+
+	for dir in hex_directions {
+		dist := hex_distance(diff, dir)
+		if dist < min_dist {
+			closest = dir
+			min_dist = dist
+		}
+	}
+
+	return closest
+}
+
 hex_neighbor :: proc(hex: Hex, direction: int) -> Hex {
 	return hex + hex_direction(direction)
 }
@@ -105,11 +126,19 @@ hex_corner_offset :: proc(layout: Layout, corner: int) -> Point {
 	return {layout.size.x * math.cos_f32(angle), layout.size.y * math.sin_f32(angle)}
 }
 
-polygon_corners :: proc(layout: Layout, h: Hex) -> (corners: [6]Point) {
+hex_corner_offset_margin :: proc(layout: Layout, corner: int, margin: f32) -> Point {
+	angle := 2.0 * math.PI * (layout.orientation.start_angle + f32(corner)) / 6.0
+	return {
+		(layout.size.x + margin) * math.cos_f32(angle),
+		(layout.size.y + margin) * math.sin_f32(angle),
+	}
+}
+
+polygon_corners :: proc(layout: Layout, h: Hex, margin: f32) -> (corners: [6]Point) {
 	center := hex_to_pixel(layout, h)
 
 	for i := 0; i < len(corners); i += 1 {
-		offset := hex_corner_offset(layout, i)
+		offset := hex_corner_offset_margin(layout, i, margin)
 		corners[i] = {center.x + offset.x, center.y + offset.y}
 	}
 
@@ -203,6 +232,23 @@ shape_hexagon :: proc(output: ^[dynamic]Hex, size: int) {
 	}
 }
 
+shape_hexagon_empty :: proc(output: ^[dynamic]Hex, size: int) {
+	for x := -size; x <= size; x += 1 {
+		r1 := max(-size, -x - size)
+		r2 := min(size, -x + size)
+
+		for y := r1; y <= r2; y += 1 {
+			is_center := x == 0 && y == 0
+
+			if rand.float32() < 0.5 && !is_center {
+				continue
+			}
+
+			append(output, Hex{x, y, -x - y})
+		}
+	}
+}
+
 // ROTATION, may need to be swapped
 // https://www.redblobgames.com/grids/hexagons/implementation.html#rotation
 
@@ -212,4 +258,14 @@ hex_rotate_left :: proc(a: Hex) -> Hex {
 
 hex_rotate_right :: proc(a: Hex) -> Hex {
 	return {-a.y, -a.z, -a.x}
+}
+
+hex_find_index :: proc(h: []Hex, search: Hex) -> int {
+	for i := 0; i < len(h); i += 1 {
+		if h[i] == search {
+			return i
+		}
+	}
+
+	return -1
 }

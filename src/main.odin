@@ -15,6 +15,8 @@ Core :: struct {
 	input:          oc.input_state,
 	last_input:     oc.input_state,
 	game:           Game_State,
+	dt:             f32,
+	dt_sum:         f32,
 }
 
 core: Core
@@ -39,7 +41,13 @@ main :: proc() {
 	context = runtime.default_context()
 	game_state_init(&core.game)
 
-	hex.shape_hexagon(&core.game.grid, 5)
+	hex.shape_hexagon_empty(&core.game.grid, 5)
+	center := hex.Hex{}
+	for x in core.game.grid {
+		oc.log_infof("x: %d, y: %d, z: %d", x.x, x.y, x.z)
+		distance := hex.hex_distance(center, x)
+		oc.log_infof("distance %d", distance)
+	}
 }
 
 @(export)
@@ -62,18 +70,19 @@ oc_on_frame_refresh :: proc "c" () {
 	oc.set_color_rgba(0.1, 0.1, 0.1, 1)
 	oc.clear()
 
-	// oc.set_color_rgba(1, 0, 0, 1)
-	// oc.rectangle_fill(0, 0, 100, 100)
-
 	// grid_render(&core.game.grid, core.game.offset)
+
+	core.dt = 0.05
+	core.dt_sum += core.dt
 
 	layout := hex.Layout {
 		orientation = hex.layout_pointy,
-		size        = 30,
+		size        = 40,
 		origin      = 400,
 	}
 	for x in core.game.grid {
-		corners := hex.polygon_corners(layout, x)
+		margin := f32(-10) * math.sin_f32(core.dt_sum + f32(x.y))
+		corners := hex.polygon_corners(layout, x, margin - 10)
 
 		oc.move_to(corners[0].x, corners[0].y)
 		for i := 1; i < len(corners); i += 1 {
@@ -82,25 +91,24 @@ oc_on_frame_refresh :: proc "c" () {
 		}
 		oc.close_path()
 
+
 		r := x.x % 2 == 0 ? f32(1) : f32(0)
 		g := x.y % 2 == 0 ? f32(1) : f32(0)
 		b := x.z % 2 == 0 ? f32(1) : f32(0)
 
 		oc.set_color_rgba(r, g, b, 1)
 		oc.fill()
+
+		closest := hex.closest_direction(x)
+		from := hex.hex_to_pixel(layout, x)
+		to := hex.hex_to_pixel(layout, x - closest)
+		oc.move_to(from.x, from.y)
+		oc.line_to(to.x, to.y)
+		oc.set_color_rgba(1, 1, 0, 1)
+		oc.stroke()
 	}
 
 	cursor := core.game.cursor
-	// t1x := triangle_x(core.game.offset, f32(core.game.grid.piece_size), cursor.x)
-	// t1y := triangle_y(core.game.offset, f32(core.game.grid.piece_size), cursor.y)
-	// t2x := triangle_x(core.game.offset, f32(core.game.grid.piece_size), cursor.x + 1)
-	// t2y := triangle_y(core.game.offset, f32(core.game.grid.piece_size), cursor.y)
-	// even := cursor.x % 2 == 0 
-	// oc.set_color_rgba(1, 0, 0, 1)
-	// triangle_stroke(t1x, t1y, f32(core.game.grid.piece_size), even)
-	// even = !even
-	// oc.set_color_rgba(1, 0, 1, 1)
-	// triangle_stroke(t2x, t2y, f32(core.game.grid.piece_size), even)
 
 	oc.canvas_render(core.renderer, core.canvas_context, core.surface)
 	oc.canvas_present(core.renderer, core.surface)
