@@ -15,10 +15,11 @@ import "hsluv"
 TICK_RATE :: 20
 TICK_TIME :: 1.0 / TICK_RATE
 
-GRID_WIDTH :: 6
+GRID_WIDTH :: 12
 GRID_HEIGHT :: 10 * 2
 
-SWAP_FRAMES :: 5
+SWAP_FRAMES :: 10
+CLEAR_WAIT_FRAMES :: 100
 CLEAR_FRAMES :: 30
 SPAWN_TIME :: 60 * 10
 SCORE_DURATION :: time.Second * 2
@@ -37,12 +38,13 @@ Game_State :: struct {
 	hexagon_size:             f32,
 	layout:                   hex.Layout,
 	grid:                     []Piece,
-	piece_dragging:           ^Piece,
+	grid_incoming:            []int,
+	piece_dragging:           Maybe(hex.Doubled_Coord),
 	piece_dragging_direction: int,
 	piece_dragging_cursor:    hex.FHex,
 	particles:                [dynamic]Particle,
 	cursor_width:             f32,
-	spawn_ticks:              f32,
+	spawn_ticks:              int,
 	score:                    int,
 	score_stats:              [dynamic]Score_Stat,
 	flux:                     ease.Flux_Map(f32),
@@ -58,16 +60,29 @@ Piece_State :: enum {
 	Hang,
 	Fall,
 	Clear_Counting,
+	Clear_Wait,
 	Clearing,
 	Swapping,
 }
 
+color_flat :: proc(r, g, b: u8) -> [3]f32 {
+	return {f32(r / 255), f32(g / 255), f32(b / 255)}
+}
+
 piece_colors := [?][3]f32 {
-	{1, 0, 0},
-	{0, 1, 0},
-	{0, 0, 1},
-	{1, 1, 0},
-	{1, 0, 1},
+	color_flat(255, 5, 6),
+	color_flat(0, 255, 1),
+	color_flat(255, 255, 0),
+	color_flat(0, 255, 255),
+	color_flat(255, 10, 255),
+}
+
+piece_outer_colors := [?][3]f32 {
+	color_flat(97, 0, 0),
+	color_flat(0, 99, 3),
+	color_flat(87, 66, 1),
+	color_flat(2, 120, 120),
+	color_flat(53, 2, 165),
 }
 
 Piece :: struct {
@@ -92,7 +107,9 @@ Fall_Check :: struct {
 game_state_init :: proc(state: ^Game_State) {
 	state.hexagon_size = 50
 	state.grid = make([]Piece, GRID_WIDTH * GRID_HEIGHT)
+	state.grid_incoming = make([]int, GRID_WIDTH)
 	grid_init(state.grid)
+	grid_init_incoming(state.grid_incoming)
 	state.spawn_ticks = SPAWN_TIME
 	state.score_stats = make([dynamic]Score_Stat, 0, 64)
 	state.particles = make([dynamic]Particle, 0, 64)
@@ -106,11 +123,14 @@ game_state_destroy :: proc(state: ^Game_State) {
 	delete(state.particles)
 }
 
-grid_init :: proc(grid: []Piece) {
-	for index := 0; index < len(grid); index += 1 {
-		grid[index] = {}
+grid_init_incoming :: proc(grid: []int) {
+	for x := 0; x < GRID_WIDTH; x += 1 {
+		color_index := int(rand.int31_max(len(piece_colors)))
+		grid[x] = color_index
 	}
+}
 
+grid_init :: proc(grid: []Piece) {
 	for x := 0; x < GRID_WIDTH; x += 1 {
 		//		for y := 0; y < 4; y += 1 {
 		index := xy2i(x, 0)
@@ -141,9 +161,8 @@ game_state_score_stats_update :: proc(state: ^Game_State) {
 
 piece_make :: proc() -> Piece {
 	return {
-		is_color    = true,
+		is_color = true,
 		color_index = int(rand.int31_max(len(piece_colors))),
-		//		state = .Hang,
 	}
 }
 
@@ -154,6 +173,11 @@ piece_get_color :: proc(piece: Piece, alpha: f32) -> [4]f32 {
 
 piece_set_current_color :: proc(piece: Piece, alpha: f32) {
 	color := piece_get_color(piece, alpha)
+
+	if piece.state == .Clear_Wait {
+		color = 1
+	}
+
 	oc.set_color_rgba(color.r, color.g, color.b, color.a)
 	//	 a := oc.color { color, .RGB }
 	//	 b := oc.color { { 0, 0, 0, 1 }, .RGB }
@@ -191,7 +215,7 @@ grid_piece_check_clear :: proc(update: ^Update_State, piece: ^Piece) {
 		game_state_score_stats_append(update.state, text)
 
 		for x in update.check_clear {
-			piece_set_state(x, .Clearing)
+			piece_set_state(x, .Clear_Wait)
 		}
 	} else {
 		// back to origin
@@ -231,13 +255,12 @@ grid_update :: proc(state: ^Game_State) {
 		}
 	}
 
+	grid_set_coordinates(&state.grid)
+
 	for &x in &state.grid {
 		piece_update(&x, &update)
 	}
 
-	if len(update.remove_list) > 0 {
-		log.info("REMOVING %d pieces", len(update.remove_list))
-	}
 	for index in update.remove_list {
 		piece := &state.grid[index]
 		piece_clear_particles(piece)
@@ -252,9 +275,8 @@ game_mouse_check :: proc(
 	is_down: bool,
 ) {
 	fx_snapped := hex.round(hex.pixel_to_hex(layout, mouse))
-
-	if state.piece_dragging != nil {
-		root := hex.qdoubled_to_cube(state.piece_dragging.coord)
+	if drag, ok := state.piece_dragging.?; ok {
+		root := hex.qdoubled_to_cube(drag)
 		fx_snapped = root
 	}
 
@@ -262,19 +284,19 @@ game_mouse_check :: proc(
 		&state.piece_dragging_cursor.x,
 		f32(fx_snapped.x),
 		core.dt,
-		1e-6,
+		1e-9,
 	)
 	exp_interpolate(
 		&state.piece_dragging_cursor.y,
 		f32(fx_snapped.y),
 		core.dt,
-		1e-6,
+		1e-9,
 	)
 	exp_interpolate(
 		&state.piece_dragging_cursor.z,
 		f32(fx_snapped.z),
 		core.dt,
-		1e-6,
+		1e-9,
 	)
 
 	fx := hex.pixel_to_hex(layout, mouse)
@@ -282,16 +304,17 @@ game_mouse_check :: proc(
 	// drag action
 	if !is_down {
 		// action
-		if state.piece_dragging != nil &&
-		   state.piece_dragging_direction != -1 {
+		if drag, ok := state.piece_dragging.?;
+		   ok && state.piece_dragging_direction != -1 {
 			direction := hex.directions[state.piece_dragging_direction]
 
-			root := hex.qdoubled_to_cube(state.piece_dragging.coord)
+			root := hex.qdoubled_to_cube(drag)
 			goal := root - direction
 			coord := hex.qdoubled_from_cube(goal)
 
-			other := grid_get_any(&state.grid, coord)
-			piece_swap(state.piece_dragging, other, coord)
+			a := grid_get_any(&state.grid, drag)
+			b := grid_get_any(&state.grid, coord)
+			piece_swap(a, b, coord)
 		}
 
 		state.piece_dragging = nil
@@ -300,11 +323,11 @@ game_mouse_check :: proc(
 	}
 
 	// drag direction
-	if state.piece_dragging != nil {
+	if drag, ok := state.piece_dragging.?; ok {
 		// get direction info
 		at_mouse := hex.round(fx)
 		direction_index := -1
-		root := hex.qdoubled_to_cube(state.piece_dragging.coord)
+		root := hex.qdoubled_to_cube(drag)
 
 		if at_mouse != root {
 			direction_index = hex.direction_towards(root, at_mouse)
@@ -321,7 +344,7 @@ game_mouse_check :: proc(
 
 		root := hex.qdoubled_to_cube(x.coord)
 		if hex.round(fx) == root {
-			state.piece_dragging = &x
+			state.piece_dragging = x.coord
 			state.piece_dragging_direction = -1
 			break
 		}
@@ -344,6 +367,8 @@ piece_enter_state :: proc(piece: ^Piece, state: Piece_State) {
 		piece.state_framecount = 30
 	case .Fall:
 	case .Clear_Counting:
+	case .Clear_Wait:
+		piece.state_framecount = CLEAR_WAIT_FRAMES
 	case .Clearing:
 		piece.state_framecount = CLEAR_FRAMES
 	case .Swapping:
@@ -382,6 +407,7 @@ piece_exit_state :: proc(piece: ^Piece) {
 	case .Hang:
 	case .Fall:
 	case .Clear_Counting:
+	case .Clear_Wait:
 	case .Clearing:
 	case .Swapping:
 	}
@@ -445,6 +471,8 @@ piece_at_end :: proc(coord: hex.Doubled_Coord) -> bool {
 }
 
 piece_update :: proc(piece: ^Piece, update: ^Update_State) {
+	// TODO make this a copy of the grid? that then gets reassigned
+
 	if piece.state_framecount > 0 {
 		piece.state_framecount -= 1
 		return
@@ -491,8 +519,10 @@ piece_update :: proc(piece: ^Piece, update: ^Update_State) {
 		}
 
 	case .Clear_Counting:
+	case .Clear_Wait:
+		piece_set_state(piece, .Clearing)
+
 	case .Clearing:
-		log.info("ADD TO CLEAR")
 		append(&update.remove_list, piece.array_index)
 
 	case .Swapping:
@@ -606,19 +636,60 @@ particles_render :: proc(particles: ^[dynamic]Particle) {
 	}
 }
 
+grid_any_clears :: proc(grid: []Piece) -> bool {
+	for x in grid {
+		if x.state == .Clearing || x.state == .Clear_Wait {
+			return true
+		}
+	}
+
+	return false
+}
+
 grid_spawn_update :: proc(state: ^Game_State) {
+	any_clears := grid_any_clears(state.grid)
+
 	if state.spawn_ticks > 0 {
-		state.spawn_ticks -= 1
+		if !any_clears {
+			state.spawn_ticks -= 1
+		}
 	} else {
 		state.spawn_ticks = SPAWN_TIME
 
 		for x in 0 ..< GRID_WIDTH {
-			index := xy2i(x, 0)
-			piece := &state.grid[index]
-
-			if !piece.is_color {
-				piece^ = piece_make()
+			for y := 1; y < GRID_HEIGHT - 1; y += 1 {
+				a := xy2i(x, y)
+				b := xy2i(x, y - 1)
+				state.grid[a], state.grid[b] = state.grid[b], state.grid[a]
 			}
 		}
+
+		for x in 0 ..< GRID_WIDTH {
+			index := xy2i(x, GRID_HEIGHT - 1)
+			piece := &state.grid[index]
+			piece^ = piece_make()
+			piece.color_index = state.grid_incoming[x]
+		}
+
+		grid_init_incoming(state.grid_incoming)
+		grid_set_coordinates(&state.grid)
+		game_update_offset(state)
+
+		if state.piece_dragging_cursor.y > 1 {
+			state.piece_dragging_cursor.y -= 1
+		}
+	}
+}
+
+game_update_offset :: proc(game: ^Game_State) {
+	game.offset.x = game.hexagon_size + 10
+	unit := f32(game.spawn_ticks) / f32(SPAWN_TIME)
+	game.offset.y =
+		game.hexagon_size + 10 + (1 - unit) * -game.hexagon_size * 1.75
+
+	game.layout = hex.Layout {
+		orientation = hex.layout_flat,
+		size        = game.hexagon_size,
+		origin      = game.offset,
 	}
 }
