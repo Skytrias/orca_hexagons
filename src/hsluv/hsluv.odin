@@ -8,16 +8,16 @@ Triplet :: struct {
 
 // for RGB
 m := [3]Triplet {
-	{  3.24096994190452134377, -1.53738317757009345794, -0.49861076029300328366 },
-	{ -0.96924363628087982613,  1.87596750150772066772,  0.04155505740717561247 },
-	{  0.05563007969699360846, -0.20397695888897656435,  1.05697151424287856072 },
+	{3.24096994190452134377, -1.53738317757009345794, -0.49861076029300328366},
+	{-0.96924363628087982613, 1.87596750150772066772, 0.04155505740717561247},
+	{0.05563007969699360846, -0.20397695888897656435, 1.05697151424287856072},
 }
 
 // for XYZ 
 m_inv := [3]Triplet {
-	{  0.41239079926595948129,  0.35758433938387796373,  0.18048078840183428751 },
-	{  0.21263900587151035754,  0.71516867876775592746,  0.07219231536073371500 },
-	{  0.01933081871559185069,  0.11919477979462598791,  0.95053215224966058086 },
+	{0.41239079926595948129, 0.35758433938387796373, 0.18048078840183428751},
+	{0.21263900587151035754, 0.71516867876775592746, 0.07219231536073371500},
+	{0.01933081871559185069, 0.11919477979462598791, 0.95053215224966058086},
 }
 
 REF_U :: 0.19783000664283680764
@@ -35,14 +35,16 @@ get_bounds :: proc "contextless" (l: f64) -> (bounds: [6]Bounds) {
 	sub1 := (tl * tl * tl) / 1560896.0
 	sub2 := sub1 > EPSILON ? sub1 : (l / KAPPA)
 
-	for channel in 0..<3 {
+	for channel in 0 ..< 3 {
 		m1 := m[channel].a
 		m2 := m[channel].b
 		m3 := m[channel].c
 
-		for t in 0..<f64(2) {
+		for t in 0 ..< f64(2) {
 			top1 := (284517.0 * m1 - 94839.0 * m3) * sub2
-			top2 := (838422.0 * m3 + 769860.0 * m2 + 731718.0 * m1) * l * sub2 -  769860.0 * t * l
+			top2 :=
+				(838422.0 * m3 + 769860.0 * m2 + 731718.0 * m1) * l * sub2 -
+				769860.0 * t * l
 			bottom := (632260.0 * m3 - 126452.0 * m2) * sub2 + 126452.0 * t
 
 			bounds[channel * 2 + int(t)].a = top1 / bottom
@@ -61,7 +63,10 @@ dist_from_pole_squared :: proc "contextless" (x, y: f64) -> f64 {
 	return x * x + y * y
 }
 
-ray_length_until_intersect :: proc "contextless" (theta: f64, line: Bounds) -> f64 {
+ray_length_until_intersect :: proc "contextless" (
+	theta: f64,
+	line: Bounds,
+) -> f64 {
 	return line.b / (math.sin(theta) - line.a * math.cos(theta))
 }
 
@@ -69,11 +74,11 @@ max_safe_chroma_for_l :: proc "contextless" (l: f64) -> f64 {
 	min_len_squared := max(f64)
 	bounds := get_bounds(l)
 
-	for i in 0..<6 {
+	for i in 0 ..< 6 {
 		m1 := bounds[i].a
 		b1 := bounds[i].b
 		// x where line intersects with perpendicular running though (0, 0)
-		line2 := Bounds { -1.0 / m1, 0.0 }
+		line2 := Bounds{-1.0 / m1, 0.0}
 		x := intersect_line_line(bounds[i], line2)
 		distance := dist_from_pole_squared(x, b1 + x * m1)
 
@@ -90,7 +95,7 @@ max_chroma_for_lh :: proc "contextless" (l, h: f64) -> f64 {
 	hrad := h * 0.01745329251994329577 // (2 * pi / 360)
 	bounds := get_bounds(l)
 
-	for i in 0..<6 {
+	for i in 0 ..< 6 {
 		len := ray_length_until_intersect(hrad, bounds[i])
 
 		if len >= 0 && len < min_len {
@@ -117,7 +122,7 @@ from_linear :: proc "contextless" (c: f64) -> f64 {
 to_linear :: proc "contextless" (c: f64) -> f64 {
 	if c > 0.04045 {
 		return math.pow((c + 0.055) / 1.055, 2.4)
-	}	else {
+	} else {
 		return c / 12.92
 	}
 }
@@ -132,7 +137,11 @@ xyz_to_rgb :: proc "contextless" (in_out: ^Triplet) {
 }
 
 rgb_to_xyz :: proc "contextless" (in_out: ^Triplet) {
-	rgbl := Triplet { to_linear(in_out.a), to_linear(in_out.b), to_linear(in_out.c) }
+	rgbl := Triplet {
+		to_linear(in_out.a),
+		to_linear(in_out.b),
+		to_linear(in_out.c),
+	}
 	x := dot_product(m_inv[0], rgbl)
 	y := dot_product(m_inv[1], rgbl)
 	z := dot_product(m_inv[2], rgbl)
@@ -154,7 +163,7 @@ simplified accordingly.
 y_to_l :: proc "contextless" (y: f64) -> f64 {
 	if y <= EPSILON {
 		return y * KAPPA
-	}	else {
+	} else {
 		return 116.0 * cbrt(y) - 16.0
 	}
 }
@@ -164,13 +173,15 @@ l_to_y :: proc "contextless" (l: f64) -> f64 {
 		return l / KAPPA
 	} else {
 		x := (l + 16.0) / 116.0
-		return (x * x * x)
+		return x * x * x
 	}
 }
 
 xyz_to_luv :: proc "contextless" (in_out: ^Triplet) {
-	var_u := (4.0 * in_out.a) / (in_out.a + (15.0 * in_out.b) + (3.0 * in_out.c))
-	var_v := (9.0 * in_out.b) / (in_out.a + (15.0 * in_out.b) + (3.0 * in_out.c))
+	var_u :=
+		(4.0 * in_out.a) / (in_out.a + (15.0 * in_out.b) + (3.0 * in_out.c))
+	var_v :=
+		(9.0 * in_out.b) / (in_out.a + (15.0 * in_out.b) + (3.0 * in_out.c))
 	l := y_to_l(in_out.b)
 	u := 13.0 * l * (var_u - REF_U)
 	v := 13.0 * l * (var_v - REF_V)
@@ -215,8 +226,8 @@ luv_to_lch :: proc "contextless" (in_out: ^Triplet) {
 	if c < 0.00000001 {
 		h = 0
 	} else {
-		h = math.atan2(v, u) * 57.29577951308232087680  // (180 / pi)
-		
+		h = math.atan2(v, u) * 57.29577951308232087680 // (180 / pi)
+
 		if h < 0.0 {
 			h += 360.0
 		}
@@ -228,7 +239,7 @@ luv_to_lch :: proc "contextless" (in_out: ^Triplet) {
 }
 
 lch_to_luv :: proc "contextless" (in_out: ^Triplet) {
-	hrad := in_out.c * 0.01745329251994329577  // (pi / 180.0)
+	hrad := in_out.c * 0.01745329251994329577 // (pi / 180.0)
 	u := math.cos(hrad) * in_out.b
 	v := math.sin(hrad) * in_out.b
 
@@ -245,7 +256,7 @@ hsluv_to_lch :: proc "contextless" (in_out: ^Triplet) {
 	// White and black: disambiguate chroma
 	if l > 99.9999999 || l < 0.00000001 {
 		c = 0.0
-	}	else {
+	} else {
 		c = max_chroma_for_lh(l, h) / 100.0 * s
 	}
 
@@ -268,7 +279,7 @@ lch_to_hsluv :: proc "contextless" (in_out: ^Triplet) {
 	// White and black: disambiguate saturation
 	if l > 99.9999999 || l < 0.00000001 {
 		s = 0.0
-	}	else {
+	} else {
 		s = c / max_chroma_for_lh(l, h) * 100.0
 	}
 
@@ -291,7 +302,7 @@ hpluv_to_lch :: proc "contextless" (in_out: ^Triplet) {
 	// White and black: disambiguate chroma
 	if l > 99.9999999 || l < 0.00000001 {
 		c = 0.0
-	}	else {
+	} else {
 		c = max_safe_chroma_for_l(l) / 100.0 * s
 	}
 
@@ -314,7 +325,7 @@ lch_to_hpluv :: proc "contextless" (in_out: ^Triplet) {
 	// White and black: disambiguate saturation
 	if l > 99.9999999 || l < 0.00000001 {
 		s = 0.0
-	}	else {
+	} else {
 		s = c / max_safe_chroma_for_l(l) * 100.0
 	}
 
@@ -340,7 +351,7 @@ Convert HSLuv to RGB.
 @param[out] pb Blue component. Between 0.0 and 1.0.
 */
 hsluv_to_rgb :: proc "contextless" (h, s, l: f64) -> (pr, pg, pb: f64) {
-	tmp := Triplet { h, s, l }
+	tmp := Triplet{h, s, l}
 	hsluv_to_lch(&tmp)
 	lch_to_luv(&tmp)
 	luv_to_xyz(&tmp)
@@ -353,7 +364,7 @@ hsluv_to_rgb :: proc "contextless" (h, s, l: f64) -> (pr, pg, pb: f64) {
 }
 
 hpluv_to_rgb :: proc "contextless" (h, s, l: f64) -> (pr, pg, pb: f64) {
-	tmp := Triplet { h, s, l }
+	tmp := Triplet{h, s, l}
 
 	hpluv_to_lch(&tmp)
 	lch_to_luv(&tmp)
@@ -377,7 +388,7 @@ Convert RGB to HSLuv.
 @param[out] pl Lightness. Between 0.0 and 100.0.
 */
 rgb_to_hsluv :: proc "contextless" (r, g, b: f64) -> (ph, ps, pl: f64) {
-	tmp := Triplet { r, g, b }
+	tmp := Triplet{r, g, b}
 
 	rgb_to_xyz(&tmp)
 	xyz_to_luv(&tmp)
@@ -391,7 +402,7 @@ rgb_to_hsluv :: proc "contextless" (r, g, b: f64) -> (ph, ps, pl: f64) {
 }
 
 rgb_to_hpluv :: proc "contextless" (r, g, b: f64) -> (ph, ps, pl: f64) {
-	tmp := Triplet { r, g, b }
+	tmp := Triplet{r, g, b}
 
 	rgb_to_xyz(&tmp)
 	xyz_to_luv(&tmp)

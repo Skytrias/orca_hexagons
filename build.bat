@@ -1,6 +1,7 @@
 @echo off
 setlocal enabledelayedexpansion
 
+@REM odinfmt -w src
 odin.exe build src -target:orca_wasm32 -out:module.wasm 
 
 IF %ERRORLEVEL% NEQ 0 (
