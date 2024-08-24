@@ -155,64 +155,51 @@ piece_get_color :: proc(piece: Piece, alpha: f32) -> [4]f32 {
 piece_set_current_color :: proc(piece: Piece, alpha: f32) {
 	color := piece_get_color(piece, alpha)
 	oc.set_color_rgba(color.r, color.g, color.b, color.a)
-	// a := oc.color { color, .RGB }
-	// b := oc.color { { 0, 0, 0, 1 }, .RGB }
-	// oc.set_gradient(.LINEAR, b, b, a, a)
+	//	 a := oc.color { color, .RGB }
+	//	 b := oc.color { { 0, 0, 0, 1 }, .RGB }
+	//	 oc.set_gradient(.LINEAR, b, b, a, a)
 }
 
 grid_check_clear_recursive :: proc(
-	grid: []^Piece,
+	grid: ^[]Piece,
 	check_clear: ^[dynamic]^Piece,
 	piece: ^Piece,
 ) {
-	//	for dir in hex.directions {
-	//		other_index := ref_grid_find_index(grid, piece.root + dir)
-	//		if other_index != -1 {
-	//			other := grid[other_index]
-	//			if other.state == .Idle && other.color_index == piece.color_index {
-	//				append(check_clear, other)
-	//				piece_set_state(other, .Clear_Counting)
-	//				grid_check_clear_recursive(grid, check_clear, other)
-	//			}
-	//		}
-	//	}
+	root := hex.qdoubled_to_cube(piece.coord)
+	for dir in hex.directions {
+		custom_root := root + dir
+		custom_coord := hex.qdoubled_from_cube(custom_root)
+
+		other := grid_get_color(grid, custom_coord)
+		if other != nil &&
+		   other.state == .Idle &&
+		   other.color_index == piece.color_index {
+			append(check_clear, other)
+			piece_set_state(other, .Clear_Counting)
+			grid_check_clear_recursive(grid, check_clear, other)
+		}
+	}
 }
 
 grid_piece_check_clear :: proc(update: ^Update_State, piece: ^Piece) {
-	//	clear(&update.check_clear)
-	//	grid_check_clear_recursive(update.grid, &update.check_clear, piece)
-	//
-	//	if len(update.check_clear) > 3 {
-	//		update.state.score += len(update.check_clear) * 100
-	//		text := fmt.tprintf("Combo: %dx", len(update.check_clear))
-	//		game_state_score_stats_append(update.state, text)
-	//
-	//		for x in update.check_clear {
-	//			piece_set_state(x, .Clearing)
-	//		}
-	//	} else {
-	//		// back to origin
-	//		for x in update.check_clear {
-	//			piece_set_state(x, .Idle)
-	//		}
-	//	}
-}
+	clear(&update.check_clear)
+	grid_check_clear_recursive(&update.state.grid, &update.check_clear, piece)
 
-//grid_piece_can_fall :: proc(
-//	grid: []^Piece,
-//	piece: ^Piece,
-//) -> (
-//	check: Fall_Check,
-//) {
-////	current_coord := hex.qdoubled_from_cube(piece.root)
-////	below_coord := hex.Doubled_Coord{current_coord.x, current_coord.y + 2}
-////	below_root := hex.qdoubled_to_cube(below_coord)
-////	check.next_root = below_root
-////	check.next_index = ref_grid_find_index(grid, check.next_root)
-////
-////	check.can_fall = current_coord.y < FALL_LIMIT && check.next_index == -1
-//	return
-//}
+	if len(update.check_clear) > 3 {
+		update.state.score += len(update.check_clear) * 100
+		text := fmt.tprintf("Combo: %dx", len(update.check_clear))
+		game_state_score_stats_append(update.state, text)
+
+		for x in update.check_clear {
+			piece_set_state(x, .Clearing)
+		}
+	} else {
+		// back to origin
+		for x in update.check_clear {
+			piece_set_state(x, .Idle)
+		}
+	}
+}
 
 grid_set_coordinates :: proc(grid: ^[]Piece) {
 	for &x, i in grid {
@@ -232,7 +219,6 @@ grid_update :: proc(state: ^Game_State) {
 		a := &state.grid[i]
 
 		if a.state == .Swapping && a.swap_framecount == 0 {
-			log.info("FINALIZE SWAP")
 			b_index := coord2i(a.swap_to)
 			b := &state.grid[b_index]
 
@@ -249,10 +235,13 @@ grid_update :: proc(state: ^Game_State) {
 		piece_update(&x, &update)
 	}
 
+	if len(update.remove_list) > 0 {
+		log.info("REMOVING %d pieces", len(update.remove_list))
+	}
 	for index in update.remove_list {
 		piece := &state.grid[index]
 		piece_clear_particles(piece)
-		piece = {}
+		piece^ = {}
 	}
 }
 
@@ -302,7 +291,6 @@ game_mouse_check :: proc(
 			coord := hex.qdoubled_from_cube(goal)
 
 			other := grid_get_any(&state.grid, coord)
-			log.info("ROOTS", root, goal, coord, other.coord)
 			piece_swap(state.piece_dragging, other, coord)
 		}
 
@@ -411,12 +399,14 @@ Update_State :: struct {
 }
 
 grid_get_color :: proc(grid: ^[]Piece, coord: hex.Doubled_Coord) -> ^Piece {
-	index := coord2i(coord)
-
-	if index < 0 || index >= len(grid) {
+	if coord.x < 0 ||
+	   coord.x >= GRID_WIDTH ||
+	   coord.y < 0 ||
+	   coord.y >= GRID_HEIGHT {
 		return nil
 	}
 
+	index := coord2i(coord)
 	piece := &grid[index]
 
 	if piece.is_color {
@@ -426,13 +416,16 @@ grid_get_color :: proc(grid: ^[]Piece, coord: hex.Doubled_Coord) -> ^Piece {
 	return nil
 }
 
+// bounds checked getter
 grid_get_any :: proc(grid: ^[]Piece, coord: hex.Doubled_Coord) -> ^Piece {
-	index := coord2i(coord)
-
-	if index < 0 || index >= len(grid) {
+	if coord.x < 0 ||
+	   coord.x >= GRID_WIDTH ||
+	   coord.y < 0 ||
+	   coord.y >= GRID_HEIGHT {
 		return nil
 	}
 
+	index := coord2i(coord)
 	return &grid[index]
 }
 
@@ -499,6 +492,7 @@ piece_update :: proc(piece: ^Piece, update: ^Update_State) {
 
 	case .Clear_Counting:
 	case .Clearing:
+		log.info("ADD TO CLEAR")
 		append(&update.remove_list, piece.array_index)
 
 	case .Swapping:
@@ -523,16 +517,13 @@ piece_swappable :: proc(a, b: ^Piece) -> bool {
 	}
 
 	if a.state != .Idle {
-		log.info("NOT SWAPPABLE 1")
 		return false
 	}
 
 	if b != nil && b.state != .Idle {
-		log.info("NOT SWAPPABLE 2")
 		return false
 	}
 
-	log.info("SWAPPABLE!!!")
 	return true
 }
 
@@ -546,15 +537,12 @@ piece_swap :: proc(a, b: ^Piece, goal: hex.Doubled_Coord) {
 		b.swap_from = b.coord
 		b.swap_interpolated = {f32(b.swap_from.x), f32(b.swap_from.y)}
 		b.swap_to = a.coord
-		log.info("SWAPPING B", b.swap_from, b.swap_to)
 	}
 
 	piece_set_state(a, .Swapping)
 	a.swap_from = a.coord
 	a.swap_interpolated = {f32(a.swap_from.x), f32(a.swap_from.y)}
 	a.swap_to = goal
-
-	log.info("SWAPPING A", a.swap_from, a.swap_to, a.state)
 }
 
 piece_render_shape :: proc(
