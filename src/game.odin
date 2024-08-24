@@ -1,6 +1,8 @@
 package src
 
 import "core:fmt"
+import "core:log"
+import "core:math"
 import "core:math/ease"
 import "core:math/rand"
 import "core:slice"
@@ -10,14 +12,15 @@ import "core:time"
 import "hex"
 import "hsluv"
 
-TICK_RATE :: 60
+TICK_RATE :: 20
 TICK_TIME :: 1.0 / TICK_RATE
 
+GRID_WIDTH :: 6
+GRID_HEIGHT :: 10 * 2
+
 SWAP_FRAMES :: 5
-FALL_LIMIT :: 15
-BOUNDS_LIMIT :: 10
 CLEAR_FRAMES :: 30
-SPAWN_TIME :: 60 * 2
+SPAWN_TIME :: 60 * 10
 SCORE_DURATION :: time.Second * 2
 
 Particle :: struct {
@@ -33,7 +36,7 @@ Game_State :: struct {
 	offset:                   oc.vec2,
 	hexagon_size:             f32,
 	layout:                   hex.Layout,
-	grid:                     [dynamic]Piece,
+	grid:                     []Piece,
 	piece_dragging:           ^Piece,
 	piece_dragging_direction: int,
 	piece_dragging_cursor:    hex.FHex,
@@ -68,22 +71,28 @@ piece_colors := [?][3]f32 {
 }
 
 Piece :: struct {
-	using root:        hex.Hex,
+	is_color:          bool,
+	coord:             hex.Doubled_Coord,
 	array_index:       int,
-	ref_index:         int,
 	color_index:       int,
 	state:             Piece_State,
 	state_framecount:  int,
 	swap_framecount:   int,
-	swap_from:         hex.Hex,
-	swap_to:           hex.Hex,
-	swap_interpolated: hex.FHex,
+	swap_from:         hex.Doubled_Coord,
+	swap_to:           hex.Doubled_Coord,
+	swap_interpolated: [2]f32,
+}
+
+Fall_Check :: struct {
+	next_index: int,
+	next_root:  hex.Hex,
+	can_fall:   bool,
 }
 
 game_state_init :: proc(state: ^Game_State) {
-	state.hexagon_size = 30
-	state.grid = make([dynamic]Piece, 0, 32)
-	grid_init(&state.grid)
+	state.hexagon_size = 50
+	state.grid = make([]Piece, GRID_WIDTH * GRID_HEIGHT)
+	grid_init(state.grid)
 	state.spawn_ticks = SPAWN_TIME
 	state.score_stats = make([dynamic]Score_Stat, 0, 64)
 	state.particles = make([dynamic]Particle, 0, 64)
@@ -97,14 +106,16 @@ game_state_destroy :: proc(state: ^Game_State) {
 	delete(state.particles)
 }
 
-grid_init :: proc(grid: ^[dynamic]Piece) {
-	clear(grid)
-	pieces := make([dynamic]hex.Hex, 0, 64, context.temp_allocator)
-	hex.shape_hexagon_empty(&pieces, BOUNDS_LIMIT)
+grid_init :: proc(grid: []Piece) {
+	for index := 0; index < len(grid); index += 1 {
+		grid[index] = {}
+	}
 
-	for x in pieces {
-		x := hex.shifted_y(x, -5)
-		append(grid, piece_make(x))
+	for x := 0; x < GRID_WIDTH; x += 1 {
+		//		for y := 0; y < 4; y += 1 {
+		index := xy2i(x, 0)
+		grid[index] = piece_make()
+		//		}
 	}
 }
 
@@ -128,32 +139,12 @@ game_state_score_stats_update :: proc(state: ^Game_State) {
 	}
 }
 
-piece_make :: proc(root: hex.Hex) -> Piece {
+piece_make :: proc() -> Piece {
 	return {
-		root = root,
+		is_color    = true,
 		color_index = int(rand.int31_max(len(piece_colors))),
-		state = .Hang,
+		//		state = .Hang,
 	}
-}
-
-ref_grid_find_index :: proc(pieces: []^Piece, search: hex.Hex) -> int {
-	for x, i in pieces {
-		if x.root == search {
-			return i
-		}
-	}
-
-	return -1
-}
-
-grid_find_index :: proc(pieces: []Piece, search: hex.Hex) -> int {
-	for x, i in pieces {
-		if x.root == search {
-			return i
-		}
-	}
-
-	return -1
 }
 
 piece_get_color :: proc(piece: Piece, alpha: f32) -> [4]f32 {
@@ -174,105 +165,94 @@ grid_check_clear_recursive :: proc(
 	check_clear: ^[dynamic]^Piece,
 	piece: ^Piece,
 ) {
-	for dir in hex.directions {
-		other_index := ref_grid_find_index(grid, piece.root + dir)
-		if other_index != -1 {
-			other := grid[other_index]
-			if other.state == .Idle && other.color_index == piece.color_index {
-				append(check_clear, other)
-				piece_set_state(other, .Clear_Counting)
-				grid_check_clear_recursive(grid, check_clear, other)
-			}
-		}
-	}
+	//	for dir in hex.directions {
+	//		other_index := ref_grid_find_index(grid, piece.root + dir)
+	//		if other_index != -1 {
+	//			other := grid[other_index]
+	//			if other.state == .Idle && other.color_index == piece.color_index {
+	//				append(check_clear, other)
+	//				piece_set_state(other, .Clear_Counting)
+	//				grid_check_clear_recursive(grid, check_clear, other)
+	//			}
+	//		}
+	//	}
 }
 
 grid_piece_check_clear :: proc(update: ^Update_State, piece: ^Piece) {
-	clear(&update.check_clear)
-	grid_check_clear_recursive(update.grid, &update.check_clear, piece)
+	//	clear(&update.check_clear)
+	//	grid_check_clear_recursive(update.grid, &update.check_clear, piece)
+	//
+	//	if len(update.check_clear) > 3 {
+	//		update.state.score += len(update.check_clear) * 100
+	//		text := fmt.tprintf("Combo: %dx", len(update.check_clear))
+	//		game_state_score_stats_append(update.state, text)
+	//
+	//		for x in update.check_clear {
+	//			piece_set_state(x, .Clearing)
+	//		}
+	//	} else {
+	//		// back to origin
+	//		for x in update.check_clear {
+	//			piece_set_state(x, .Idle)
+	//		}
+	//	}
+}
 
-	if len(update.check_clear) > 3 {
-		update.state.score += len(update.check_clear) * 100
-		text := fmt.tprintf("Combo: %dx", len(update.check_clear))
-		game_state_score_stats_append(update.state, text)
+//grid_piece_can_fall :: proc(
+//	grid: []^Piece,
+//	piece: ^Piece,
+//) -> (
+//	check: Fall_Check,
+//) {
+////	current_coord := hex.qdoubled_from_cube(piece.root)
+////	below_coord := hex.Doubled_Coord{current_coord.x, current_coord.y + 2}
+////	below_root := hex.qdoubled_to_cube(below_coord)
+////	check.next_root = below_root
+////	check.next_index = ref_grid_find_index(grid, check.next_root)
+////
+////	check.can_fall = current_coord.y < FALL_LIMIT && check.next_index == -1
+//	return
+//}
 
-		for x in update.check_clear {
-			piece_set_state(x, .Clearing)
-		}
-	} else {
-		// back to origin
-		for x in update.check_clear {
-			piece_set_state(x, .Idle)
-		}
+grid_set_coordinates :: proc(grid: ^[]Piece) {
+	for &x, i in grid {
+		x.array_index = i
+		x.coord = i2coord(i)
 	}
-}
-
-Fall_Check :: struct {
-	next_index: int,
-	next_root:  hex.Hex,
-	can_fall:   bool,
-}
-
-grid_piece_can_fall :: proc(
-	grid: []^Piece,
-	piece: ^Piece,
-) -> (
-	check: Fall_Check,
-) {
-	current_coord := hex.qdoubled_from_cube(piece.root)
-	below_coord := hex.Doubled_Coord{current_coord.x, current_coord.y + 2}
-	below_root := hex.qdoubled_to_cube(below_coord)
-	check.next_root = below_root
-	check.next_index = ref_grid_find_index(grid, check.next_root)
-
-	check.can_fall = current_coord.y < FALL_LIMIT && check.next_index == -1
-	return
 }
 
 grid_update :: proc(state: ^Game_State) {
 	update: Update_State
 	update.state = state
-	update.grid = make([]^Piece, len(state.grid))
-	for &x, i in &state.grid {
-		x.array_index = i
-		update.grid[i] = &x
-	}
-
-	slice.sort_by(update.grid, proc(a, b: ^Piece) -> bool {
-		coord_a := hex.qdoubled_from_cube(a)
-		coord_b := hex.qdoubled_from_cube(b)
-		return coord_a.y < coord_b.y
-	})
-
-	// set ref index for info
-	for &x, i in &update.grid {
-		x.ref_index = i
-	}
-
 	update.check_clear = make([dynamic]^Piece, 0, 64, context.temp_allocator)
 	update.remove_list = make([dynamic]int, 0, 64, context.temp_allocator)
 
-	for x in &update.grid {
-		piece_update(x, &update)
+	// look to perform swaps
+	for i := 0; i < len(state.grid); i += 1 {
+		a := &state.grid[i]
+
+		if a.state == .Swapping && a.swap_framecount == 0 {
+			log.info("FINALIZE SWAP")
+			b_index := coord2i(a.swap_to)
+			b := &state.grid[b_index]
+
+			piece_set_state(a, .Idle)
+			piece_set_state(b, .Idle)
+
+			temp := a^
+			a^ = b^
+			b^ = temp
+		}
 	}
 
-	slice.sort_by_cmp(
-		update.remove_list[:],
-		proc(a, b: int) -> slice.Ordering {
-			switch {
-			case a < b:
-				return .Greater
-			case a > b:
-				return .Less
-			}
-			return .Equal
-		},
-	)
+	for &x in &state.grid {
+		piece_update(&x, &update)
+	}
 
 	for index in update.remove_list {
-		piece := state.grid[index]
+		piece := &state.grid[index]
 		piece_clear_particles(piece)
-		unordered_remove(&state.grid, index)
+		piece = {}
 	}
 }
 
@@ -285,7 +265,8 @@ game_mouse_check :: proc(
 	fx_snapped := hex.round(hex.pixel_to_hex(layout, mouse))
 
 	if state.piece_dragging != nil {
-		fx_snapped = state.piece_dragging.root
+		root := hex.qdoubled_to_cube(state.piece_dragging.coord)
+		fx_snapped = root
 	}
 
 	exp_interpolate(
@@ -316,14 +297,13 @@ game_mouse_check :: proc(
 		   state.piece_dragging_direction != -1 {
 			direction := hex.directions[state.piece_dragging_direction]
 
-			goal := state.piece_dragging.root - direction
+			root := hex.qdoubled_to_cube(state.piece_dragging.coord)
+			goal := root - direction
 			coord := hex.qdoubled_from_cube(goal)
 
-			if coord.y < FALL_LIMIT {
-				next_index := grid_find_index(state.grid[:], goal)
-				other := next_index != -1 ? &state.grid[next_index] : nil
-				piece_swap(state.piece_dragging, other, goal)
-			}
+			other := grid_get_any(&state.grid, coord)
+			log.info("ROOTS", root, goal, coord, other.coord)
+			piece_swap(state.piece_dragging, other, coord)
 		}
 
 		state.piece_dragging = nil
@@ -336,11 +316,10 @@ game_mouse_check :: proc(
 		// get direction info
 		at_mouse := hex.round(fx)
 		direction_index := -1
-		if at_mouse != state.piece_dragging.root {
-			direction_index = hex.direction_towards(
-				state.piece_dragging.root,
-				at_mouse,
-			)
+		root := hex.qdoubled_to_cube(state.piece_dragging.coord)
+
+		if at_mouse != root {
+			direction_index = hex.direction_towards(root, at_mouse)
 		}
 		state.piece_dragging_direction = direction_index
 		return
@@ -352,7 +331,8 @@ game_mouse_check :: proc(
 			continue
 		}
 
-		if hex.round(fx) == x.root {
+		root := hex.qdoubled_to_cube(x.coord)
+		if hex.round(fx) == root {
 			state.piece_dragging = &x
 			state.piece_dragging_direction = -1
 			break
@@ -384,8 +364,10 @@ piece_enter_state :: proc(piece: ^Piece, state: Piece_State) {
 	piece.state = state
 }
 
-piece_clear_particles :: proc(piece: Piece) {
-	center := hex.to_pixel(core.game.layout, piece)
+piece_clear_particles :: proc(piece: ^Piece) {
+	root := hex.qdoubled_to_cube(piece.coord)
+	center := hex.to_pixel(core.game.layout, root)
+
 	for i in 0 ..< 10 {
 		direction := [2]f32{rand.float32() * 2 - 1, rand.float32() * 2 - 1}
 		lifetime := rand.int31_max(50)
@@ -424,37 +406,49 @@ piece_set_state :: proc(piece: ^Piece, new_state: Piece_State) {
 
 Update_State :: struct {
 	state:       ^Game_State,
-	grid:        []^Piece,
 	check_clear: [dynamic]^Piece,
 	remove_list: [dynamic]int,
 }
 
-coord_below :: proc(h: hex.Hex) -> hex.Doubled_Coord {
-	temp := hex.qdoubled_from_cube(h)
-	return {temp.x, temp.y + 2}
-}
+grid_get_color :: proc(grid: ^[]Piece, coord: hex.Doubled_Coord) -> ^Piece {
+	index := coord2i(coord)
 
-piece_fall_downwards :: proc(piece: ^Piece) -> (root: hex.Doubled_Coord) {
-	root = hex.qdoubled_from_cube(piece.root)
-	piece.root = hex.qdoubled_to_cube({root.x, root.y + 2})
-	return
-}
-
-piece_fall_cascade :: proc(piece: ^Piece, update: ^Update_State) {
-	origin := piece_fall_downwards(piece)
-
-	// cascade fall upper
-	for &other in update.grid {
-		other_coord := hex.qdoubled_from_cube(other)
-
-		if other == piece {
-			continue
-		}
-
-		if other_coord.x == origin.x && other_coord.y < origin.y {
-			piece_fall_downwards(other)
-		}
+	if index < 0 || index >= len(grid) {
+		return nil
 	}
+
+	piece := &grid[index]
+
+	if piece.is_color {
+		return piece
+	}
+
+	return nil
+}
+
+grid_get_any :: proc(grid: ^[]Piece, coord: hex.Doubled_Coord) -> ^Piece {
+	index := coord2i(coord)
+
+	if index < 0 || index >= len(grid) {
+		return nil
+	}
+
+	return &grid[index]
+}
+
+piece_fall_cascade :: proc(grid: ^[]Piece, piece: ^Piece) {
+	// cascade fall upper
+	for y := piece.coord.y; y >= 0; y -= 2 {
+		a_index := xy2i(piece.coord.x, y)
+		b_index := xy2i(piece.coord.x, y + 2)
+		grid[a_index], grid[b_index] = grid[b_index], grid[a_index]
+	}
+
+	grid_set_coordinates(grid)
+}
+
+piece_at_end :: proc(coord: hex.Doubled_Coord) -> bool {
+	return coord.y == GRID_HEIGHT || coord.y == GRID_HEIGHT - 1
 }
 
 piece_update :: proc(piece: ^Piece, update: ^Update_State) {
@@ -463,24 +457,23 @@ piece_update :: proc(piece: ^Piece, update: ^Update_State) {
 		return
 	}
 
-	if piece.state == .Swapping && piece.swap_framecount == 0 {
-		piece.root = piece.swap_to
-		piece_set_state(piece, .Idle)
-	}
-
 	if piece.swap_framecount > 0 {
 		piece.swap_framecount -= 1
 	}
 
+	if !piece.is_color {
+		piece.state = .Idle
+		return
+	}
+
 	switch piece.state {
 	case .Idle:
-		below := coord_below(piece)
-		below_index := ref_grid_find_index(
-			update.grid,
-			hex.qdoubled_to_cube(below),
-		)
+		below := coord_below(piece.coord)
+		below_piece := grid_get_any(&update.state.grid, below)
 
-		if below_index == -1 && below.y < FALL_LIMIT {
+		if below_piece != nil &&
+		   !below_piece.is_color &&
+		   !piece_at_end(piece.coord) {
 			piece_set_state(piece, .Hang)
 		}
 
@@ -490,18 +483,16 @@ piece_update :: proc(piece: ^Piece, update: ^Update_State) {
 		piece_set_state(piece, .Fall)
 
 	case .Fall:
-		below := coord_below(piece)
-		below_index := ref_grid_find_index(
-			update.grid,
-			hex.qdoubled_to_cube(below),
-		)
+		below := coord_below(piece.coord)
+		below_piece := grid_get_any(&update.state.grid, below)
 
-		if below_index == -1 {
-			if below.y < FALL_LIMIT {
-				piece_fall_cascade(piece, update)
-			} else {
-				piece_set_state(piece, .Idle)
-			}
+		if piece_at_end(piece.coord) {
+			piece_set_state(piece, .Idle)
+			return
+		}
+
+		if below_piece != nil && !below_piece.is_color {
+			piece_fall_cascade(&update.state.grid, piece)
 		} else {
 			piece_set_state(piece, .Idle)
 		}
@@ -512,42 +503,58 @@ piece_update :: proc(piece: ^Piece, update: ^Update_State) {
 
 	case .Swapping:
 		unit := f32(piece.swap_framecount) / SWAP_FRAMES
-		piece.swap_interpolated = hex.lerp(
-			piece.swap_from,
-			piece.swap_to,
+		piece.swap_interpolated.x = math.lerp(
+			f32(piece.swap_from.x),
+			f32(piece.swap_to.x),
+			1 - unit,
+		)
+		piece.swap_interpolated.y = math.lerp(
+			f32(piece.swap_from.y),
+			f32(piece.swap_to.y),
 			1 - unit,
 		)
 	}
 }
 
 piece_swappable :: proc(a, b: ^Piece) -> bool {
+	// dont allow two floaties to swap
+	if !a.is_color && b != nil && !b.is_color {
+		return false
+	}
+
 	if a.state != .Idle {
+		log.info("NOT SWAPPABLE 1")
 		return false
 	}
 
 	if b != nil && b.state != .Idle {
+		log.info("NOT SWAPPABLE 2")
 		return false
 	}
 
+	log.info("SWAPPABLE!!!")
 	return true
 }
 
-piece_swap :: proc(a, b: ^Piece, goal: hex.Hex) {
+piece_swap :: proc(a, b: ^Piece, goal: hex.Doubled_Coord) {
 	if !piece_swappable(a, b) {
 		return
 	}
 
 	if b != nil {
 		piece_set_state(b, .Swapping)
-		b.swap_from = b.root
-		b.swap_interpolated = hex.to_float(b.root)
-		b.swap_to = a.root
+		b.swap_from = b.coord
+		b.swap_interpolated = {f32(b.swap_from.x), f32(b.swap_from.y)}
+		b.swap_to = a.coord
+		log.info("SWAPPING B", b.swap_from, b.swap_to)
 	}
 
 	piece_set_state(a, .Swapping)
-	a.swap_from = a.root
-	a.swap_interpolated = hex.to_float(a.root)
+	a.swap_from = a.coord
+	a.swap_interpolated = {f32(a.swap_from.x), f32(a.swap_from.y)}
 	a.swap_to = goal
+
+	log.info("SWAPPING A", a.swap_from, a.swap_to, a.state)
 }
 
 piece_render_shape :: proc(
@@ -566,9 +573,11 @@ piece_render_shape :: proc(
 	}
 
 	if piece.state == .Swapping {
-		corners = hex.fpolygon_corners(layout, piece.swap_interpolated, margin)
+		custom_root := hex.fqdoubled_to_cube(piece.swap_interpolated)
+		corners = hex.fpolygon_corners(layout, custom_root, margin)
 	} else {
-		corners = hex.polygon_corners(layout, piece, margin)
+		root := hex.qdoubled_to_cube(piece.coord)
+		corners = hex.polygon_corners(layout, root, margin)
 	}
 
 	hexagon_path(corners)
@@ -615,9 +624,13 @@ grid_spawn_update :: proc(state: ^Game_State) {
 	} else {
 		state.spawn_ticks = SPAWN_TIME
 
-		for x in -BOUNDS_LIMIT ..= BOUNDS_LIMIT {
-			root := hex.qdoubled_to_cube({x, -FALL_LIMIT})
-			append(&state.grid, piece_make(root))
+		for x in 0 ..< GRID_WIDTH {
+			index := xy2i(x, 0)
+			piece := &state.grid[index]
+
+			if !piece.is_color {
+				piece^ = piece_make()
+			}
 		}
 	}
 }

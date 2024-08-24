@@ -76,6 +76,13 @@ qdoubled_to_cube :: proc(h: Doubled_Coord) -> Hex {
 	return {q, r, s}
 }
 
+fqdoubled_to_cube :: proc(h: [2]f32) -> FHex {
+	q := h.x
+	r := f32(h.y - h.x) / 2
+	s := -q - r
+	return {q, r, s}
+}
+
 rdoubled_from_cube :: proc(h: Hex) -> Doubled_Coord {
 	col := 2 * h.x + h.y
 	row := h.y
@@ -94,7 +101,6 @@ rdoubled_to_cube :: proc(h: Doubled_Coord) -> Hex {
 
 length :: proc "contextless" (hex: Hex) -> int {
 	return int((abs(hex.x) + abs(hex.y) + abs(hex.z)) / 2)
-	// return int((abs(hex.x) + abs(hex.y) + abs(hex.z)))
 }
 
 distance :: proc "contextless" (a, b: Hex) -> int {
@@ -108,40 +114,6 @@ direction :: proc "contextless" (dir: int) -> Hex {
 center_direction :: proc "contextless" (a: Hex) -> Hex {
 	center := Hex{}
 	return {center.x - a.x, center.y - a.y, center.z - a.z}
-}
-
-update_z :: proc "contextless" (h: ^Hex) {
-	h.z = -h.x - h.y
-}
-
-shifted_x :: proc(h: Hex, offset: int) -> Hex {
-	goal := h.x + offset
-	return {goal, h.y, -goal - h.y}
-}
-
-shifted_y :: proc(h: Hex, offset: int) -> Hex {
-	goal := h.y + offset
-	return {h.x, goal, -h.x - goal}
-}
-
-set_x :: proc "contextless" (h: ^Hex, to: int) {
-	h.x = to
-	update_z(h)
-}
-
-set_y :: proc "contextless" (h: ^Hex, to: int) {
-	h.y = to
-	update_z(h)
-}
-
-offset_x :: proc "contextless" (h: ^Hex, offset: int) {
-	h.x += offset
-	update_z(h)
-}
-
-offset_y :: proc "contextless" (h: ^Hex, offset: int) {
-	h.y += offset
-	update_z(h)
 }
 
 direction_towards :: proc "contextless" (a, b: Hex) -> int {
@@ -165,9 +137,9 @@ direction_towards :: proc "contextless" (a, b: Hex) -> int {
 	return closest_direction
 }
 
-neighbor :: proc "contextless" (hex: Hex, dir: int) -> Hex {
-	return hex + direction(dir)
-}
+//neighbor :: proc "contextless" (hex: Hex, dir: int) -> Hex {
+//	return hex + direction(dir)
+//}
 
 // HEX TO SCREEN
 // https://www.redblobgames.com/grids/hexagons/implementation.html#hex-to-pixel
@@ -306,64 +278,6 @@ linedraw :: proc(output: ^[dynamic]Hex, a, b: Hex) {
 	step := 1.0 / max(f32(count), 1)
 	for i := 0; i < count; i += 1 {
 		append(output, round(lerp(a, b, step * f32(i))))
-	}
-}
-
-// linedraw :: proc "contextless" (output: ^[dynamic]Hex, a, b: Hex) {
-// 	count := distance(a, b)
-// 	a_nudge := FHex{f32(a.x) + 1e-6, f32(a.y) + 1e-6, f32(a.z) - 2e-6}
-// 	b_nudge := FHex{f32(b.x) + 1e-6, f32(b.y) + 1e-6, f32(b.z) - 2e-6}
-// 	clear(output)
-// 	step := 1.0 / max(f32(count), 1)
-// 	for i := 0; i < count; i += 1 {
-// 		append(output, round(lerp(a_nudge, b_nudge, step * f32(i))))
-// 	}
-// }
-
-// MAP SHAPES
-// https://www.redblobgames.com/grids/hexagons/implementation.html#map-shapes
-
-shape_parallelogram :: proc(output: ^[dynamic]Hex, x1, x2, y1, y2: int) {
-	for x := x1; x <= x2; x += 1 {
-		for y := y1; y <= y2; y += 1 {
-			append(output, Hex{x, y, -x - y})
-		}
-	}
-}
-
-shape_triangle :: proc(output: ^[dynamic]Hex, size: int) {
-	for x := 0; x <= size; x += 1 {
-		for y := 0; y <= size; y += 1 {
-			append(output, Hex{x, y, -x - y})
-		}
-	}
-}
-
-shape_hexagon :: proc(output: ^[dynamic]Hex, size: int) {
-	for x := -size; x <= size; x += 1 {
-		r1 := max(-size, -x - size)
-		r2 := min(size, -x + size)
-
-		for y := r1; y <= r2; y += 1 {
-			append(output, Hex{x, y, -x - y})
-		}
-	}
-}
-
-shape_hexagon_empty :: proc(output: ^[dynamic]Hex, size: int) {
-	for x := -size; x <= size; x += 1 {
-		r1 := max(-size, -x - size)
-		r2 := min(size, -x + size)
-
-		for y := r1; y <= r2; y += 1 {
-			is_center := x == 0 && y == 0
-
-			if rand.float32() < 0.75 && !is_center {
-				continue
-			}
-
-			append(output, Hex{x, y, -x - y})
-		}
 	}
 }
 

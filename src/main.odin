@@ -69,7 +69,10 @@ main :: proc() {
 oc_on_resize :: proc "c" (width, height: u32) {
 	core.window_size = {f32(width), f32(height)}
 	g := core.game.grid
-	core.game.offset = {f32(width / 2), f32(height / 2)}
+	core.game.offset = {
+		core.game.hexagon_size + 10,
+		core.game.hexagon_size + 10,
+	}
 }
 
 update :: proc() {
@@ -99,10 +102,12 @@ oc_on_frame_refresh :: proc "c" () {
 		//		log.infof("%v %v %v", core.dt, core.update_accumulator, core.ui_context.lastFrameDuration)
 	}
 
+	grid_set_coordinates(&core.game.grid)
+
 	//	for core.update_accumulator >= TICK_TIME {
 	update()
-	//		core.update_accumulator -= TICK_TIME
-	//	}
+	//			core.update_accumulator -= TICK_TIME
+	//		}
 
 	core.game.layout = hex.Layout {
 		orientation = hex.layout_flat,
@@ -118,7 +123,7 @@ oc_on_frame_refresh :: proc "c" () {
 	)
 
 	game_draw_grid(&core.game)
-	game_draw_bottom(&core.game)
+	//	game_draw_bottom(&core.game)
 
 	particles_render(&core.game.particles)
 
@@ -167,15 +172,18 @@ oc_on_raw_event :: proc "c" (event: ^oc.event) {
 
 	if key_pressed(keyboard_state, last_keyboard_state, .ENTER) {
 		context = runtime.default_context()
-		grid_init(&core.game.grid)
+		grid_init(core.game.grid)
 	}
 }
 
 // ---
 
 game_draw_grid :: proc(game: ^Game_State) {
-	MARGIN :: 2
 	for &x, i in &game.grid {
+		if !x.is_color {
+			continue
+		}
+
 		corners := piece_render_shape(&x, game.layout)
 
 		if x.state == .Hang || x.state == .Fall {
@@ -193,27 +201,28 @@ game_draw_grid :: proc(game: ^Game_State) {
 			oc.stroke()
 		}
 
-		// small_font_size := core.font_size - 10
-		// coord := hex.qdoubled_from_cube(x)
-		// oc.set_font(core.font)
-		// oc.set_color_rgba(0, 0, 0, 1)
-		// oc.set_font_size(small_font_size)
-		// center := hex.to_pixel(layout, x)
-		// hex_text := fmt.tprintf("%d %d", coord.x, coord.y)
-		// oc.text_fill(center.x - 15, center.y, hex_text)
-		// hex_text = fmt.tprintf("%d", x.ref_index)
-		// oc.text_fill(center.x - 15, center.y + small_font_size, hex_text)
+		small_font_size := core.font_size - 10
+
+		root := hex.qdoubled_to_cube(x.coord)
+		center := hex.to_pixel(game.layout, root)
+		hex_text := fmt.tprintf("%d:%d", x.coord.x, x.coord.y)
+		//		hex_text = fmt.tprintf("S: %d", int(x.state))
+
+		oc.set_font(core.font)
+		oc.set_color_rgba(0, 0, 0, 1)
+		oc.set_font_size(small_font_size)
+		oc.text_fill(center.x - 15, center.y + small_font_size, hex_text)
 	}
 }
 
 game_draw_bottom :: proc(game: ^Game_State) {
-	for x in -BOUNDS_LIMIT ..= BOUNDS_LIMIT {
-		root := hex.qdoubled_to_cube({x, FALL_LIMIT + 1})
-		corners := hex.polygon_corners(game.layout, root, 0)
-		hexagon_path(corners)
-		oc.set_color_rgba(0, 0, 0, 1)
-		oc.fill()
-	}
+	//	for x in -BOUNDS_LIMIT ..= BOUNDS_LIMIT {
+	//		root := hex.qdoubled_to_cube({x, FALL_LIMIT + 1})
+	//		corners := hex.polygon_corners(game.layout, root, 0)
+	//		hexagon_path(corners)
+	//		oc.set_color_rgba(0, 0, 0, 1)
+	//		oc.fill()
+	//	}
 }
 
 game_draw_cursor :: proc(game: ^Game_State) {
@@ -222,8 +231,9 @@ game_draw_cursor :: proc(game: ^Game_State) {
 	hexagon_path(corners)
 
 	fx := hex.pixel_to_hex(game.layout, core.input.mouse.pos)
-	mouse_index := grid_find_index(game.grid[:], hex.round(fx))
-	stroke_width := mouse_index != -1 ? f32(5) : f32(2)
+	mouse_root := hex.qdoubled_from_cube(hex.round(fx))
+	mouse_piece := grid_get_color(&game.grid, mouse_root)
+	stroke_width := mouse_piece != nil ? f32(5) : f32(2)
 	if game.piece_dragging != nil {
 		stroke_width = 10
 	}
@@ -240,8 +250,9 @@ game_draw_cursor :: proc(game: ^Game_State) {
 
 	if game.piece_dragging_direction != -1 {
 		x := game.piece_dragging
+		root := hex.qdoubled_to_cube(x.coord)
 		direction := hex.directions[game.piece_dragging_direction]
-		x_offset := x.root - direction
+		x_offset := root - direction
 		corners := hex.polygon_corners(game.layout, x_offset, 0)
 		hexagon_path(corners)
 
