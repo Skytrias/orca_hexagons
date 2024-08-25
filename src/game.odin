@@ -18,7 +18,9 @@ TICK_TIME :: 1.0 / TICK_RATE
 GRID_WIDTH :: 12
 GRID_HEIGHT :: 10 * 2
 
+HANG_FRAMES :: 30
 SWAP_FRAMES :: 10
+LAND_FRAMES :: 40 * 10
 CLEAR_WAIT_FRAMES :: 100
 CLEAR_FRAMES :: 30
 SPAWN_TIME :: 60 * 25
@@ -69,6 +71,7 @@ Piece_State :: enum {
 	Clear_Wait,
 	Clearing,
 	Swapping,
+	Landing,
 }
 
 color_flat :: proc(r, g, b: u8) -> [3]f32 {
@@ -194,6 +197,8 @@ piece_set_current_color :: proc(piece: Piece, alpha: f32) {
 
 	if piece.state == .Clear_Wait {
 		color = 1
+	} else if piece.state == .Landing {
+		color.xyz = piece_outer_colors[piece.color_index]
 	}
 
 	oc.set_color_rgba(color.r, color.g, color.b, color.a)
@@ -214,7 +219,7 @@ grid_check_clear_recursive :: proc(
 
 		other := grid_get_color(grid, custom_coord)
 		if other != nil &&
-		   other.state == .Idle &&
+		   state_swappable(other.state) &&
 		   other.color_index == piece.color_index {
 			append(check_clear, other)
 			piece_set_state(other, .Clear_Counting)
@@ -367,7 +372,7 @@ game_mouse_check :: proc(
 
 	// drag location
 	for &x, i in &state.grid {
-		if x.state != .Idle {
+		if !state_swappable(x.state) {
 			continue
 		}
 
@@ -393,7 +398,7 @@ piece_enter_state :: proc(piece: ^Piece, state: Piece_State) {
 	switch state {
 	case .Idle:
 	case .Hang:
-		piece.state_framecount = 30
+		piece.state_framecount = HANG_FRAMES
 	case .Fall:
 	case .Clear_Counting:
 	case .Clear_Wait:
@@ -402,6 +407,8 @@ piece_enter_state :: proc(piece: ^Piece, state: Piece_State) {
 		piece.state_framecount = CLEAR_FRAMES
 	case .Swapping:
 		piece.swap_framecount = SWAP_FRAMES
+	case .Landing:
+		piece.state_framecount = LAND_FRAMES
 	}
 	piece.state = state
 }
@@ -439,6 +446,7 @@ piece_exit_state :: proc(piece: ^Piece) {
 	case .Clear_Wait:
 	case .Clearing:
 	case .Swapping:
+	case .Landing:
 	}
 }
 
@@ -537,14 +545,14 @@ piece_update :: proc(piece: ^Piece, update: ^Update_State) {
 		below_piece := grid_get_any(&update.state.grid, below)
 
 		if piece_at_end(piece.coord) {
-			piece_set_state(piece, .Idle)
+			piece_set_state(piece, .Landing)
 			return
 		}
 
 		if below_piece != nil && !below_piece.is_color {
 			piece_fall_cascade(&update.state.grid, piece)
 		} else {
-			piece_set_state(piece, .Idle)
+			piece_set_state(piece, .Landing)
 		}
 
 	case .Clear_Counting:
@@ -553,6 +561,9 @@ piece_update :: proc(piece: ^Piece, update: ^Update_State) {
 
 	case .Clearing:
 		append(&update.remove_list, piece.array_index)
+
+	case .Landing:
+		piece_set_state(piece, .Idle)
 
 	case .Swapping:
 		unit := f32(piece.swap_framecount) / SWAP_FRAMES
@@ -567,6 +578,10 @@ piece_update :: proc(piece: ^Piece, update: ^Update_State) {
 			1 - unit,
 		)
 	}
+}
+
+state_swappable :: proc(state: Piece_State) -> bool {
+	return state == .Idle || state == .Landing
 }
 
 piece_swappable :: proc(a, b: ^Piece) -> bool {
@@ -729,4 +744,26 @@ game_update_offset :: proc(game: ^Game_State) {
 		size        = game.hexagon_size,
 		origin      = game.offset,
 	}
+}
+
+piece_state_text :: proc(state: Piece_State) -> (result: string) {
+	switch state {
+	case .Idle:
+		result = "IDLE"
+	case .Hang:
+		result = "HANG"
+	case .Fall:
+		result = "FALL"
+	case .Clear_Counting:
+		result = "C C"
+	case .Clear_Wait:
+		result = "C W"
+	case .Clearing:
+		result = "Clearing"
+	case .Swapping:
+		result = "SWAP"
+	case .Landing:
+		result = "LAND"
+	}
+	return
 }

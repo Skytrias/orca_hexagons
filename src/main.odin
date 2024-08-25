@@ -194,17 +194,18 @@ game_draw_grid :: proc(game: ^Game_State) {
 			oc.stroke()
 		}
 
-		//		small_font_size := core.font_size - 10
-		//
-		//		root := hex.qdoubled_to_cube(x.coord)
-		//		center := hex.to_pixel(game.layout, root)
-		//		hex_text := fmt.tprintf("%d:%d", x.coord.x, x.coord.y)
-		//		//		hex_text = fmt.tprintf("S: %d", int(x.state))
-		//
-		//		oc.set_font(core.font)
-		//		oc.set_color_rgba(0, 0, 0, 1)
-		//		oc.set_font_size(small_font_size)
-		//		oc.text_fill(center.x - 15, center.y + small_font_size, hex_text)
+		small_font_size := core.font_size - 10
+
+		root := hex.qdoubled_to_cube(x.coord)
+		center := hex.to_pixel(game.layout, root)
+
+		state_text := piece_state_text(x.state)
+		hex_text := fmt.tprintf("%s %d", state_text, x.state_framecount)
+
+		oc.set_font(core.font)
+		oc.set_color_rgba(0, 0, 0, 1)
+		oc.set_font_size(small_font_size)
+		oc.text_fill(center.x - game.hexagon_size / 2, center.y, hex_text)
 	}
 
 	for x, i in &game.grid_incoming {
