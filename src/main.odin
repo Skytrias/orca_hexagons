@@ -206,6 +206,13 @@ game_draw_grid :: proc(game: ^Game_State) {
 		oc.set_color_rgba(0, 0, 0, 1)
 		oc.set_font_size(small_font_size)
 		oc.text_fill(center.x - game.hexagon_size / 2, center.y, hex_text)
+
+		hex_text = fmt.tprintf("%d %d", x.coord.x, x.coord.y)
+		oc.text_fill(
+			center.x - game.hexagon_size / 2,
+			center.y + small_font_size,
+			hex_text,
+		)
 	}
 
 	for x, i in &game.grid_incoming {

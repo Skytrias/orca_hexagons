@@ -39,3 +39,7 @@ i2coord :: proc(index: int) -> (coord: hex.Doubled_Coord) {
 coord_below :: proc(coord: hex.Doubled_Coord) -> hex.Doubled_Coord {
 	return {coord.x, coord.y + 2}
 }
+
+color_flat :: proc(r, g, b: u8) -> [3]f32 {
+	return {f32(r) / 255, f32(g) / 255, f32(b) / 255}
+}

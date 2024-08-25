@@ -5,6 +5,7 @@ import "core:log"
 import "core:math"
 import "core:math/ease"
 import "core:math/rand"
+import "core:mem"
 import "core:slice"
 import "core:strings"
 import oc "core:sys/orca"
@@ -18,12 +19,15 @@ TICK_TIME :: 1.0 / TICK_RATE
 GRID_WIDTH :: 12
 GRID_HEIGHT :: 10 * 2
 
-HANG_FRAMES :: 30
-SWAP_FRAMES :: 10
-LAND_FRAMES :: 40 * 10
-CLEAR_WAIT_FRAMES :: 100
-CLEAR_FRAMES :: 30
-SPAWN_TIME :: 60 * 25
+DEBUG_SPEED :: 1
+
+FALL_FRAMES :: 0 * DEBUG_SPEED
+HANG_FRAMES :: 30 * DEBUG_SPEED
+SWAP_FRAMES :: 10 * DEBUG_SPEED
+LAND_FRAMES :: 40 * DEBUG_SPEED
+CLEAR_WAIT_FRAMES :: 100 * DEBUG_SPEED
+CLEAR_FRAMES :: 30 * DEBUG_SPEED
+SPAWN_TIME :: 60 * 25 * DEBUG_SPEED
 SCORE_DURATION :: time.Second * 2
 
 Particle :: struct {
@@ -47,6 +51,7 @@ Game_State :: struct {
 	hexagon_size:  f32,
 	layout:        hex.Layout,
 	grid:          []Piece,
+	grid_copy:     []Piece,
 	grid_incoming: []int,
 	drag:          Drag_State,
 	particles:     [dynamic]Particle,
@@ -74,8 +79,11 @@ Piece_State :: enum {
 	Landing,
 }
 
-color_flat :: proc(r, g, b: u8) -> [3]f32 {
-	return {f32(r) / 255, f32(g) / 255, f32(b) / 255}
+Update_State :: struct {
+	grid:        []Piece,
+	score:       int,
+	check_clear: [dynamic]^Piece,
+	remove_list: [dynamic]int,
 }
 
 piece_colors := [?][3]f32 {
@@ -97,11 +105,9 @@ piece_outer_colors := [?][3]f32 {
 Piece :: struct {
 	is_color:          bool,
 	coord:             hex.Doubled_Coord,
-	array_index:       int,
 	color_index:       int,
 	state:             Piece_State,
 	state_framecount:  int,
-	swap_framecount:   int,
 	swap_from:         hex.Doubled_Coord,
 	swap_to:           hex.Doubled_Coord,
 	swap_interpolated: [2]f32,
@@ -116,6 +122,7 @@ Fall_Check :: struct {
 game_state_init :: proc(state: ^Game_State) {
 	state.hexagon_size = 50
 	state.grid = make([]Piece, GRID_WIDTH * GRID_HEIGHT)
+	state.grid_copy = make([]Piece, GRID_WIDTH * GRID_HEIGHT)
 	state.grid_incoming = make([]int, GRID_WIDTH)
 	grid_init(state.grid)
 	grid_init_incoming(state.grid_incoming)
@@ -129,6 +136,7 @@ game_state_init :: proc(state: ^Game_State) {
 game_state_destroy :: proc(state: ^Game_State) {
 	delete(state.score_stats)
 	delete(state.grid)
+	delete(state.grid_copy)
 	delete(state.particles)
 }
 
@@ -230,12 +238,12 @@ grid_check_clear_recursive :: proc(
 
 grid_piece_check_clear :: proc(update: ^Update_State, piece: ^Piece) {
 	clear(&update.check_clear)
-	grid_check_clear_recursive(&update.state.grid, &update.check_clear, piece)
+	grid_check_clear_recursive(&update.grid, &update.check_clear, piece)
 
 	if len(update.check_clear) > 3 {
-		update.state.score += len(update.check_clear) * 100
+		update.score += len(update.check_clear) * 100
 		text := fmt.tprintf("Combo: %dx", len(update.check_clear))
-		game_state_score_stats_append(update.state, text)
+		//		game_state_score_stats_append(update.grid, text)
 
 		for x in update.check_clear {
 			piece_set_state(x, .Clear_Wait)
@@ -250,24 +258,49 @@ grid_piece_check_clear :: proc(update: ^Update_State, piece: ^Piece) {
 
 grid_set_coordinates :: proc(grid: ^[]Piece) {
 	for &x, i in grid {
-		x.array_index = i
 		x.coord = i2coord(i)
 	}
 }
 
 grid_update :: proc(state: ^Game_State) {
+	copy(state.grid_copy, state.grid)
+
 	update: Update_State
-	update.state = state
+	update.grid = state.grid_copy
 	update.check_clear = make([dynamic]^Piece, 0, 64, context.temp_allocator)
 	update.remove_list = make([dynamic]int, 0, 64, context.temp_allocator)
 
-	// look to perform swaps
-	for i := 0; i < len(state.grid); i += 1 {
-		a := &state.grid[i]
+	for &x in &update.grid {
+		piece_update(&x, &update)
+	}
 
-		if a.state == .Swapping && a.swap_framecount == 0 {
+	// check for fall actions upwards with offsets
+	for x in 0 ..< GRID_WIDTH {
+		yoffset := 0
+		if x % 2 != 0 {
+			yoffset = 1
+		}
+
+		for y := GRID_HEIGHT - 1 - yoffset; y >= yoffset; y -= 2 {
+			index := xy2i(x, y)
+			index_above := xy2i(x, y - 2)
+			a := &update.grid[index]
+			b := &update.grid[index_above]
+
+			if b.state == .Fall && b.state_framecount == 0 && !a.is_color {
+				a^, b^ = b^, a^
+				a.state_framecount = FALL_FRAMES
+			}
+		}
+	}
+
+	// look to perform actual swaps once they end
+	for i := 0; i < len(update.grid); i += 1 {
+		a := &update.grid[i]
+
+		if a.state == .Swapping && a.state_framecount == 0 {
 			b_index := coord2i(a.swap_to)
-			b := &state.grid[b_index]
+			b := &update.grid[b_index]
 
 			piece_set_state(a, .Idle)
 			piece_set_state(b, .Idle)
@@ -278,17 +311,9 @@ grid_update :: proc(state: ^Game_State) {
 		}
 	}
 
+	// copy back and set coordinates properly
+	copy(state.grid, state.grid_copy)
 	grid_set_coordinates(&state.grid)
-
-	for &x in &state.grid {
-		piece_update(&x, &update)
-	}
-
-	for index in update.remove_list {
-		piece := &state.grid[index]
-		piece_clear_particles(piece)
-		piece^ = {}
-	}
 }
 
 game_mouse_check :: proc(
@@ -400,13 +425,14 @@ piece_enter_state :: proc(piece: ^Piece, state: Piece_State) {
 	case .Hang:
 		piece.state_framecount = HANG_FRAMES
 	case .Fall:
+		piece.state_framecount = FALL_FRAMES
 	case .Clear_Counting:
 	case .Clear_Wait:
 		piece.state_framecount = CLEAR_WAIT_FRAMES
 	case .Clearing:
 		piece.state_framecount = CLEAR_FRAMES
 	case .Swapping:
-		piece.swap_framecount = SWAP_FRAMES
+		piece.state_framecount = SWAP_FRAMES
 	case .Landing:
 		piece.state_framecount = LAND_FRAMES
 	}
@@ -455,12 +481,6 @@ piece_set_state :: proc(piece: ^Piece, new_state: Piece_State) {
 	piece_enter_state(piece, new_state)
 }
 
-Update_State :: struct {
-	state:       ^Game_State,
-	check_clear: [dynamic]^Piece,
-	remove_list: [dynamic]int,
-}
-
 grid_get_color :: proc(grid: ^[]Piece, coord: hex.Doubled_Coord) -> ^Piece {
 	if coord.x < 0 ||
 	   coord.x >= GRID_WIDTH ||
@@ -492,33 +512,32 @@ grid_get_any :: proc(grid: ^[]Piece, coord: hex.Doubled_Coord) -> ^Piece {
 	return &grid[index]
 }
 
-piece_fall_cascade :: proc(grid: ^[]Piece, piece: ^Piece) {
-	// cascade fall upper
-	for y := piece.coord.y; y >= 0; y -= 2 {
-		a_index := xy2i(piece.coord.x, y)
-		b_index := xy2i(piece.coord.x, y + 2)
-		grid[a_index], grid[b_index] = grid[b_index], grid[a_index]
-	}
-
-	grid_set_coordinates(grid)
-}
+//piece_fall_cascade :: proc(grid: ^[]Piece, piece: ^Piece) {
+//	// cascade fall upper
+//	for y := piece.coord.y; y >= 0; y -= 2 {
+//		a_index := xy2i(piece.coord.x, y)
+//		b_index := xy2i(piece.coord.x, y + 2)
+//		grid[a_index], grid[b_index] = grid[b_index], grid[a_index]
+//	}
+//
+//	grid_set_coordinates(grid)
+//}
 
 piece_at_end :: proc(coord: hex.Doubled_Coord) -> bool {
-	return coord.y == GRID_HEIGHT || coord.y == GRID_HEIGHT - 1
+	return coord.y == GRID_HEIGHT - 1 || coord.y == GRID_HEIGHT - 2
 }
 
 piece_update :: proc(piece: ^Piece, update: ^Update_State) {
-	// TODO make this a copy of the grid? that then gets reassigned
-
 	if piece.state_framecount > 0 {
 		piece.state_framecount -= 1
-		return
+
+		// allow swapping updates to interpolation
+		if piece.state != .Swapping {
+			return
+		}
 	}
 
-	if piece.swap_framecount > 0 {
-		piece.swap_framecount -= 1
-	}
-
+	// skip empty pieces
 	if !piece.is_color {
 		piece.state = .Idle
 		return
@@ -527,31 +546,29 @@ piece_update :: proc(piece: ^Piece, update: ^Update_State) {
 	switch piece.state {
 	case .Idle:
 		below := coord_below(piece.coord)
-		below_piece := grid_get_any(&update.state.grid, below)
+		below_piece := grid_get_any(&update.grid, below)
 
 		if below_piece != nil &&
 		   !below_piece.is_color &&
 		   !piece_at_end(piece.coord) {
+			log.info("SET HANG")
 			piece_set_state(piece, .Hang)
 		}
 
-		grid_piece_check_clear(update, piece)
+	//		grid_piece_check_clear(update, piece)
 
 	case .Hang:
 		piece_set_state(piece, .Fall)
 
 	case .Fall:
 		below := coord_below(piece.coord)
-		below_piece := grid_get_any(&update.state.grid, below)
+		below_piece := grid_get_color(&update.grid, below)
 
 		if piece_at_end(piece.coord) {
 			piece_set_state(piece, .Landing)
-			return
 		}
 
-		if below_piece != nil && !below_piece.is_color {
-			piece_fall_cascade(&update.state.grid, piece)
-		} else {
+		if below_piece != nil && below_piece.state == .Idle {
 			piece_set_state(piece, .Landing)
 		}
 
@@ -560,13 +577,13 @@ piece_update :: proc(piece: ^Piece, update: ^Update_State) {
 		piece_set_state(piece, .Clearing)
 
 	case .Clearing:
-		append(&update.remove_list, piece.array_index)
+	//		append(&update.remove_list, piece.array_index)
 
 	case .Landing:
 		piece_set_state(piece, .Idle)
 
 	case .Swapping:
-		unit := f32(piece.swap_framecount) / SWAP_FRAMES
+		unit := f32(piece.state_framecount) / SWAP_FRAMES
 		piece.swap_interpolated.x = math.lerp(
 			f32(piece.swap_from.x),
 			f32(piece.swap_to.x),
