@@ -105,11 +105,13 @@ oc_on_frame_refresh :: proc "c" () {
 	//			core.update_accumulator -= TICK_TIME
 	//		}
 
+	key_down := oc.key_down(&core.input, .Q)
+	is_down := oc.mouse_down(&core.input, .LEFT) || key_down
 	game_mouse_check(
 		&core.game,
 		core.game.layout,
 		core.input.mouse.pos,
-		oc.mouse_down(&core.input, .LEFT),
+		is_down,
 	)
 
 	game_draw_grid(&core.game)
@@ -163,6 +165,8 @@ oc_on_raw_event :: proc "c" (event: ^oc.event) {
 		context = runtime.default_context()
 		grid_init(core.game.grid)
 	}
+
+	core.game.spawn_speedup = oc.key_down(&core.input, .SPACE) ? 10 : 1
 }
 
 // ---
@@ -223,20 +227,8 @@ game_draw_bottom :: proc(game: ^Game_State) {
 	//	}
 }
 
-game_draw_cursor :: proc(game: ^Game_State) {
-	goal := game.piece_dragging_cursor
-	corners := hex.fpolygon_corners(game.layout, goal, 0)
+draw_cursor :: proc(game: ^Game_State, corners: [6]hex.Point) {
 	hexagon_path(corners)
-
-	fx := hex.pixel_to_hex(game.layout, core.input.mouse.pos)
-	mouse_root := hex.qdoubled_from_cube(hex.round(fx))
-	mouse_piece := grid_get_color(&game.grid, mouse_root)
-	stroke_width := mouse_piece != nil ? f32(5) : f32(2)
-	if game.piece_dragging != nil {
-		stroke_width = 10
-	}
-	exp_interpolate(&game.cursor_width, stroke_width, core.dt, 1e-3)
-
 	oc.set_width(game.cursor_width + 2)
 	oc.set_color_rgba(0, 0, 0, 1)
 	oc.stroke()
@@ -245,24 +237,27 @@ game_draw_cursor :: proc(game: ^Game_State) {
 	oc.set_width(game.cursor_width)
 	oc.set_color_rgba(1, 1, 1, 1)
 	oc.stroke()
+}
 
-	if drag, ok := game.piece_dragging.?;
-	   ok && game.piece_dragging_direction != -1 {
-		root := hex.qdoubled_to_cube(drag)
-		direction := hex.directions[game.piece_dragging_direction]
-		x_offset := root - direction
-		corners := hex.polygon_corners(game.layout, x_offset, 0)
-		hexagon_path(corners)
+game_draw_cursor :: proc(game: ^Game_State) {
+	drag := &game.drag
 
-		oc.set_width(game.cursor_width + 2)
-		oc.set_color_rgba(0, 0, 0, 1)
-		oc.stroke()
-
-		hexagon_path(corners)
-		oc.set_width(game.cursor_width)
-		oc.set_color_rgba(1, 1, 1, 1)
-		oc.stroke()
+	if drag.cursor_direction != drag.cursor {
+		corners := hex.fpolygon_corners(game.layout, drag.cursor_direction, 0)
+		draw_cursor(game, corners)
 	}
+
+	fx := hex.pixel_to_hex(game.layout, core.input.mouse.pos)
+	mouse_root := hex.qdoubled_from_cube(hex.round(fx))
+	mouse_piece := grid_get_color(&game.grid, mouse_root)
+	stroke_width := mouse_piece != nil ? f32(5) : f32(2)
+	if drag.coord != nil {
+		stroke_width = 10
+	}
+	exp_interpolate(&game.cursor_width, stroke_width, core.dt, 1e-3)
+
+	corners := hex.fpolygon_corners(game.layout, drag.cursor, 0)
+	draw_cursor(game, corners)
 }
 
 game_draw_stats_left :: proc(game: ^Game_State) {

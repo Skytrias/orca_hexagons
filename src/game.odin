@@ -21,7 +21,7 @@ GRID_HEIGHT :: 10 * 2
 SWAP_FRAMES :: 10
 CLEAR_WAIT_FRAMES :: 100
 CLEAR_FRAMES :: 30
-SPAWN_TIME :: 60 * 10
+SPAWN_TIME :: 60 * 25
 SCORE_DURATION :: time.Second * 2
 
 Particle :: struct {
@@ -33,21 +33,27 @@ Particle :: struct {
 	lifetime:            int,
 }
 
+Drag_State :: struct {
+	coord:            Maybe(hex.Doubled_Coord),
+	direction:        int,
+	cursor:           hex.FHex,
+	cursor_direction: hex.FHex,
+}
+
 Game_State :: struct {
-	offset:                   oc.vec2,
-	hexagon_size:             f32,
-	layout:                   hex.Layout,
-	grid:                     []Piece,
-	grid_incoming:            []int,
-	piece_dragging:           Maybe(hex.Doubled_Coord),
-	piece_dragging_direction: int,
-	piece_dragging_cursor:    hex.FHex,
-	particles:                [dynamic]Particle,
-	cursor_width:             f32,
-	spawn_ticks:              int,
-	score:                    int,
-	score_stats:              [dynamic]Score_Stat,
-	flux:                     ease.Flux_Map(f32),
+	offset:        oc.vec2,
+	hexagon_size:  f32,
+	layout:        hex.Layout,
+	grid:          []Piece,
+	grid_incoming: []int,
+	drag:          Drag_State,
+	particles:     [dynamic]Particle,
+	cursor_width:  f32,
+	spawn_ticks:   int,
+	spawn_speedup: int,
+	score:         int,
+	score_stats:   [dynamic]Score_Stat,
+	flux:          ease.Flux_Map(f32),
 }
 
 Score_Stat :: struct {
@@ -66,7 +72,7 @@ Piece_State :: enum {
 }
 
 color_flat :: proc(r, g, b: u8) -> [3]f32 {
-	return {f32(r / 255), f32(g / 255), f32(b / 255)}
+	return {f32(r) / 255, f32(g) / 255, f32(b) / 255}
 }
 
 piece_colors := [?][3]f32 {
@@ -111,9 +117,9 @@ game_state_init :: proc(state: ^Game_State) {
 	grid_init(state.grid)
 	grid_init_incoming(state.grid_incoming)
 	state.spawn_ticks = SPAWN_TIME
+	state.spawn_speedup = 1
 	state.score_stats = make([dynamic]Score_Stat, 0, 64)
 	state.particles = make([dynamic]Particle, 0, 64)
-
 	state.flux = ease.flux_init(f32, 64)
 }
 
@@ -123,10 +129,20 @@ game_state_destroy :: proc(state: ^Game_State) {
 	delete(state.particles)
 }
 
+// initialize the colord at the bottom to not make the beginning
 grid_init_incoming :: proc(grid: []int) {
+	last := -1
+	current := -1
 	for x := 0; x < GRID_WIDTH; x += 1 {
-		color_index := int(rand.int31_max(len(piece_colors)))
-		grid[x] = color_index
+		last = current
+		current = int(rand.int31_max(len(piece_colors)))
+
+		for last == current {
+			last = current
+			current = int(rand.int31_max(len(piece_colors)))
+		}
+
+		grid[x] = current
 	}
 }
 
@@ -173,15 +189,17 @@ piece_get_color :: proc(piece: Piece, alpha: f32) -> [4]f32 {
 
 piece_set_current_color :: proc(piece: Piece, alpha: f32) {
 	color := piece_get_color(piece, alpha)
+	//	a := oc.color { color, .RGB }
+	//	b := oc.color { { 0, 0, 0, 1 }, .RGB }
 
 	if piece.state == .Clear_Wait {
 		color = 1
 	}
 
 	oc.set_color_rgba(color.r, color.g, color.b, color.a)
-	//	 a := oc.color { color, .RGB }
-	//	 b := oc.color { { 0, 0, 0, 1 }, .RGB }
-	//	 oc.set_gradient(.LINEAR, b, b, a, a)
+	//		outer := piece_outer_colors[piece.color_index]
+	//		b = { { outer.x, outer.y, outer.z, alpha }, .RGB }
+	//		oc.set_gradient(.LINEAR, b, b, a, a)
 }
 
 grid_check_clear_recursive :: proc(
@@ -274,27 +292,38 @@ game_mouse_check :: proc(
 	mouse: [2]f32,
 	is_down: bool,
 ) {
+	drag := &state.drag
+
 	fx_snapped := hex.round(hex.pixel_to_hex(layout, mouse))
-	if drag, ok := state.piece_dragging.?; ok {
-		root := hex.qdoubled_to_cube(drag)
+	if mouse_root, ok := drag.coord.?; ok {
+		root := hex.qdoubled_to_cube(mouse_root)
 		fx_snapped = root
 	}
 
+	exp_interpolate(&drag.cursor.x, f32(fx_snapped.x), core.dt, 1e-9)
+	exp_interpolate(&drag.cursor.y, f32(fx_snapped.y), core.dt, 1e-9)
+	exp_interpolate(&drag.cursor.z, f32(fx_snapped.z), core.dt, 1e-9)
+
+	direction_snapped := fx_snapped
+	if drag.direction != -1 {
+		direction_snapped = fx_snapped - hex.directions[drag.direction]
+	}
+
 	exp_interpolate(
-		&state.piece_dragging_cursor.x,
-		f32(fx_snapped.x),
+		&drag.cursor_direction.x,
+		f32(direction_snapped.x),
 		core.dt,
 		1e-9,
 	)
 	exp_interpolate(
-		&state.piece_dragging_cursor.y,
-		f32(fx_snapped.y),
+		&drag.cursor_direction.y,
+		f32(direction_snapped.y),
 		core.dt,
 		1e-9,
 	)
 	exp_interpolate(
-		&state.piece_dragging_cursor.z,
-		f32(fx_snapped.z),
+		&drag.cursor_direction.z,
+		f32(direction_snapped.z),
 		core.dt,
 		1e-9,
 	)
@@ -304,35 +333,35 @@ game_mouse_check :: proc(
 	// drag action
 	if !is_down {
 		// action
-		if drag, ok := state.piece_dragging.?;
-		   ok && state.piece_dragging_direction != -1 {
-			direction := hex.directions[state.piece_dragging_direction]
+		if mouse_root, ok := drag.coord.?; ok && drag.direction != -1 {
+			direction := hex.directions[drag.direction]
 
-			root := hex.qdoubled_to_cube(drag)
+			root := hex.qdoubled_to_cube(mouse_root)
 			goal := root - direction
 			coord := hex.qdoubled_from_cube(goal)
 
-			a := grid_get_any(&state.grid, drag)
+			a := grid_get_any(&state.grid, mouse_root)
 			b := grid_get_any(&state.grid, coord)
 			piece_swap(a, b, coord)
 		}
 
-		state.piece_dragging = nil
-		state.piece_dragging_direction = -1
+		drag.coord = nil
+		drag.direction = -1
 		return
 	}
 
 	// drag direction
-	if drag, ok := state.piece_dragging.?; ok {
+	if mouse_root, ok := drag.coord.?; ok {
 		// get direction info
 		at_mouse := hex.round(fx)
-		direction_index := -1
-		root := hex.qdoubled_to_cube(drag)
+		root := hex.qdoubled_to_cube(mouse_root)
 
 		if at_mouse != root {
-			direction_index = hex.direction_towards(root, at_mouse)
+			drag.direction = hex.direction_towards(root, at_mouse)
+		} else {
+			drag.direction = -1
 		}
-		state.piece_dragging_direction = direction_index
+
 		return
 	}
 
@@ -344,8 +373,8 @@ game_mouse_check :: proc(
 
 		root := hex.qdoubled_to_cube(x.coord)
 		if hex.round(fx) == root {
-			state.piece_dragging = x.coord
-			state.piece_dragging_direction = -1
+			drag.coord = x.coord
+			drag.direction = -1
 			break
 		}
 	}
@@ -651,11 +680,12 @@ grid_spawn_update :: proc(state: ^Game_State) {
 
 	if state.spawn_ticks > 0 {
 		if !any_clears {
-			state.spawn_ticks -= 1
+			state.spawn_ticks -= 1 * state.spawn_speedup
 		}
 	} else {
 		state.spawn_ticks = SPAWN_TIME
 
+		// shift upwards
 		for x in 0 ..< GRID_WIDTH {
 			for y := 1; y < GRID_HEIGHT - 1; y += 1 {
 				a := xy2i(x, y)
@@ -664,6 +694,7 @@ grid_spawn_update :: proc(state: ^Game_State) {
 			}
 		}
 
+		// set bottom line
 		for x in 0 ..< GRID_WIDTH {
 			index := xy2i(x, GRID_HEIGHT - 1)
 			piece := &state.grid[index]
@@ -671,12 +702,18 @@ grid_spawn_update :: proc(state: ^Game_State) {
 			piece.color_index = state.grid_incoming[x]
 		}
 
+		// update positions
 		grid_init_incoming(state.grid_incoming)
 		grid_set_coordinates(&state.grid)
 		game_update_offset(state)
 
-		if state.piece_dragging_cursor.y > 1 {
-			state.piece_dragging_cursor.y -= 1
+		// graphical pos
+		if state.drag.cursor.y > 1 {
+			state.drag.cursor.y -= 1
+			state.drag.cursor_direction.y -= 1
+		}
+		if drag, ok := &state.drag.coord.?; ok {
+			drag.y -= 2
 		}
 	}
 }
