@@ -1,0 +1,34 @@
+{
+	"folders":
+	[
+		{
+			"path": ".",
+			"folder_exclude_patterns": [
+				".git",	
+				"output",
+			],
+			"file_exclude_patterns": [
+				"module.wasm",	
+			],
+		},
+	],
+	"build_systems": [
+		{
+			"name": "odin orca build",
+			"cmd": "",
+			"variants": [
+				{
+					"name": "build",
+					"cmd": "build.bat",
+					"file_regex": "^(.+)\\(([0-9]+):([0-9]+)\\) (.+)$",
+					"working_dir": "$folder",
+				},
+				{
+					"name": "run",
+					"cmd": "run.bat",
+					"working_dir": "$folder",
+				}
+			]
+		}
+	]
+}

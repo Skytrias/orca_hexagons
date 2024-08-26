@@ -36,7 +36,7 @@ on_terminate :: proc() {
 
 main :: proc() {
 	oc.window_set_title("orca fun")
-	core.window_size = {1000, 1000}
+	core.window_size = {750, 750}
 	oc.window_set_size(core.window_size)
 
 	core.renderer = oc.canvas_renderer_create()
@@ -194,10 +194,9 @@ game_draw_grid :: proc(game: ^Game_State) {
 			oc.stroke()
 		}
 
-		small_font_size := core.font_size - 10
-
-		root := hex.qdoubled_to_cube(x.coord)
-		center := hex.to_pixel(game.layout, root)
+		small_font_size := core.font_size - 12
+		xx := corners[4].x
+		yy := corners[4].y + game.hexagon_size/2 + small_font_size
 
 		state_text := piece_state_text(x.state)
 		hex_text := fmt.tprintf("%s %d", state_text, x.state_framecount)
@@ -205,12 +204,12 @@ game_draw_grid :: proc(game: ^Game_State) {
 		oc.set_font(core.font)
 		oc.set_color_rgba(0, 0, 0, 1)
 		oc.set_font_size(small_font_size)
-		oc.text_fill(center.x - game.hexagon_size / 2, center.y, hex_text)
+		oc.text_fill(xx, yy, hex_text)
 
 		hex_text = fmt.tprintf("%d %d", x.coord.x, x.coord.y)
 		oc.text_fill(
-			center.x - game.hexagon_size / 2,
-			center.y + small_font_size,
+			xx,
+			yy + small_font_size,
 			hex_text,
 		)
 	}
@@ -257,7 +256,7 @@ game_draw_cursor :: proc(game: ^Game_State) {
 
 	fx := hex.pixel_to_hex(game.layout, core.input.mouse.pos)
 	mouse_root := hex.qdoubled_from_cube(hex.round(fx))
-	mouse_piece := grid_get_color(&game.grid, mouse_root)
+	mouse_piece := grid_get_color(game.grid, mouse_root)
 	stroke_width := mouse_piece != nil ? f32(5) : f32(2)
 	if drag.coord != nil {
 		stroke_width = 10
