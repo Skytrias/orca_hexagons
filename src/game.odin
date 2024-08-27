@@ -26,8 +26,8 @@ HANG_FRAMES :: 30 * DEBUG_SPEED
 SWAP_FRAMES :: 10 * DEBUG_SPEED
 LAND_FRAMES :: 40 * DEBUG_SPEED
 CLEAR_FLASH_FRAMES :: 120 * DEBUG_SPEED
-CLEAR_DELAY_FRAMES :: 10 * DEBUG_SPEED
-CLEARING_FRAMES :: 30 * DEBUG_SPEED
+CLEAR_DELAY_FRAMES :: 30 * DEBUG_SPEED
+CLEARING_FRAMES :: 40 * DEBUG_SPEED
 SPAWN_TIME :: 60 * 25 * DEBUG_SPEED
 SCORE_DURATION :: time.Second * 2
 
@@ -105,24 +105,25 @@ piece_outer_colors := [?][3]f32 {
 
 Piece :: struct {
 	// Visual coordinate
-	coord:             hex.Doubled_Coord,
+	coord:                 hex.Doubled_Coord,
 
 	// Color Info
-	is_color:          bool,
-	color_index:       int,
+	is_color:              bool,
+	color_index:           int,
 
 	// state data
-	state:             Piece_State,
-	state_framecount:  int,
-	state_total:       int, // wait for all clearing pieces to finish
+	state:                 Piece_State,
+	state_framecount:      int,
+	state_total:           int, // wait for all clearing pieces to finish
 
 	// Swapping
-	swap_from:         hex.Doubled_Coord,
-	swap_to:           hex.Doubled_Coord,
-	swap_interpolated: [2]f32,
+	swap_from:             hex.Doubled_Coord,
+	swap_to:               hex.Doubled_Coord,
+	swap_interpolated:     [2]f32,
 
 	// Clearing
-	clear_index:       int,
+	clear_index:           int,
+	clear_spawn_particles: bool,
 }
 
 Fall_Check :: struct {
@@ -218,10 +219,13 @@ piece_set_current_color :: proc(piece: Piece, alpha: f32) {
 
 	if piece.state == .Clear_Flash {
 		color = 1
+		unit := f32(piece.state_framecount) / f32(CLEAR_FLASH_FRAMES)
+		color.a = math.sin(unit * math.PI * 10)
 	} else if piece.state == .Clear_Delay {
 		color = {0, 0, 0, 1}
 	} else if piece.state == .Landing {
-		color.xyz = piece_outer_colors[piece.color_index]
+		// color.xyz = piece_outer_colors[piece.color_index]
+		color.a *= 0.5
 	}
 
 	oc.set_color_rgba(color.r, color.g, color.b, color.a)
@@ -236,6 +240,7 @@ grid_check_clear :: proc(state: ^Clear_State, piece: ^Piece) {
 	clear(&state.queue)
 	clear(&state.visited)
 	append(&state.queue, piece)
+	append(&state.connections, piece)
 
 	// as long as the queue is full
 	for len(state.queue) > 0 {
@@ -251,7 +256,6 @@ grid_check_clear :: proc(state: ^Clear_State, piece: ^Piece) {
 			// check for match
 			other := grid_get_color(state.grid, custom_coord)
 			if other != nil &&
-			   other.is_color &&
 			   state_swappable(other.state) &&
 			   other.color_index == piece.color_index &&
 			   other not_in state.visited {
@@ -275,6 +279,14 @@ grid_update :: proc(state: ^Game_State) {
 	// update all state machines
 	for &x in &state.grid_copy {
 		piece_update(&x, state.grid_copy)
+	}
+
+	// spawn particles
+	for &x in &state.grid_copy {
+		if x.clear_spawn_particles {
+			piece_clear_particles(state, &x)
+			x.clear_spawn_particles = false
+		}
 	}
 
 	// check for fall actions upwards with offsets
@@ -307,8 +319,14 @@ grid_update :: proc(state: ^Game_State) {
 			b_index := coord2i(a.swap_to)
 			b := &state.grid_copy[b_index]
 
-			piece_set_state(a, .Idle)
-			piece_set_state(b, .Idle)
+			piece_set_state(
+				a,
+				piece_can_hang(state.grid_copy, a) ? .Hang : .Idle,
+			)
+			piece_set_state(
+				b,
+				piece_can_hang(state.grid_copy, b) ? .Hang : .Idle,
+			)
 
 			temp := a^
 			a^ = b^
@@ -322,7 +340,7 @@ grid_update :: proc(state: ^Game_State) {
 		grid        = state.grid_copy,
 		connections = make([dynamic]^Piece, 0, 32, context.temp_allocator),
 		queue       = make([dynamic]^Piece, 0, 32, context.temp_allocator),
-		visited     = make(map[^Piece]bool, 32),
+		visited     = make(map[^Piece]bool, 32, context.temp_allocator),
 	}
 
 	// cechk for clear updates
@@ -333,9 +351,9 @@ grid_update :: proc(state: ^Game_State) {
 		}
 
 		grid_check_clear(&clear, &x)
-		if len(clear.connections) > 3 {
-			// text := fmt.tprintf("Combo: %dx", len(update.check_clear))
-			// //		game_state_score_stats_append(update.grid, text)
+		if len(clear.connections) > 4 {
+			text := fmt.tprintf("Combo: %dx", len(clear.connections))
+			game_state_score_stats_append(state, text)
 			state.score += len(clear.connections) * 100
 
 			for other, i in clear.connections {
@@ -484,9 +502,9 @@ hexagon_path :: proc(corners: [6]hex.Point) {
 }
 
 piece_enter_state :: proc(piece: ^Piece, state: Piece_State) {
+	piece.state_framecount = 0
 	switch state {
 	case .Idle:
-		piece.state_framecount = 0
 	case .Hang:
 		piece.state_framecount = HANG_FRAMES
 	case .Fall:
@@ -505,27 +523,26 @@ piece_enter_state :: proc(piece: ^Piece, state: Piece_State) {
 	piece.state = state
 }
 
-piece_clear_particles :: proc(piece: ^Piece) {
+piece_clear_particles :: proc(state: ^Game_State, piece: ^Piece) {
 	root := hex.qdoubled_to_cube(piece.coord)
-	center := hex.to_pixel(core.game.layout, root)
+	center := hex.to_pixel(state.layout, root)
 
-	for i in 0 ..< 10 {
+	for i in 0 ..< 20 {
 		direction := [2]f32{rand.float32() * 2 - 1, rand.float32() * 2 - 1}
 		lifetime := rand.int31_max(50)
 
-		hue := rand.float64() * 360
-		r, g, b := hsluv.hsluv_to_rgb(hue, 100, 50)
-		size := rand.float32() * 15 + 5
+		color := piece_colors[piece.color_index]
+		size := rand.float32() * 20 + 10
 
 		particle := Particle {
 			pos       = center,
 			direction = direction,
 			lifetime  = int(lifetime),
-			color     = {f32(r), f32(g), f32(b)},
+			color     = color.rgb,
 			radius    = size,
 		}
 
-		append(&core.game.particles, particle)
+		append(&state.particles, particle)
 	}
 }
 
@@ -590,6 +607,10 @@ piece_update :: proc(piece: ^Piece, grid: []Piece) {
 	if piece.state_framecount > 0 {
 		piece.state_framecount -= 1
 
+		if piece.state_framecount == 0 && piece.state == .Clearing {
+			piece.clear_spawn_particles = true
+		}
+
 		// allow swapping updates to interpolation
 		if piece.state != .Swapping {
 			return
@@ -604,12 +625,7 @@ piece_update :: proc(piece: ^Piece, grid: []Piece) {
 
 	switch piece.state {
 	case .Idle:
-		below := coord_below(piece.coord)
-		below_piece := grid_get_any(grid, below)
-
-		if below_piece != nil &&
-		   !below_piece.is_color &&
-		   !piece_at_end(piece.coord) {
+		if piece_can_hang(grid, piece) {
 			piece_set_state(piece, .Hang)
 		}
 
@@ -619,10 +635,16 @@ piece_update :: proc(piece: ^Piece, grid: []Piece) {
 			yoffset = 1
 		}
 
-		for y := piece.coord.y; y >= 0; y -= 2 {
+		piece_set_state(piece, .Fall)
+		for y := piece.coord.y - 2; y >= 0; y -= 2 {
 			index := xy2i(piece.coord.x, y)
 			a := &grid[index]
-			piece_set_state(a, .Fall)
+
+			if a.is_color && a.state == .Idle {
+				piece_set_state(a, .Fall)
+			} else {
+				break
+			}
 		}
 
 	// piece_set_state(piece, .Fall)
@@ -646,7 +668,6 @@ piece_update :: proc(piece: ^Piece, grid: []Piece) {
 		piece_set_state(piece, .Clearing)
 
 	case .Clearing:
-
 
 	case .Landing:
 		piece_set_state(piece, .Idle)
@@ -709,12 +730,25 @@ piece_swap :: proc(a, b: ^Piece, goal: hex.Doubled_Coord) {
 	a.swap_to = goal
 }
 
-piece_render_shape :: proc(
+piece_corners :: proc(
 	piece: ^Piece,
 	layout: hex.Layout,
+	margin: f32,
 ) -> (
 	corners: [6]hex.Point,
 ) {
+	if piece.state == .Swapping {
+		custom_root := hex.fqdoubled_to_cube(piece.swap_interpolated)
+		corners = hex.fpolygon_corners(layout, custom_root, margin)
+	} else {
+		root := hex.qdoubled_to_cube(piece.coord)
+		corners = hex.polygon_corners(layout, root, margin)
+	}
+
+	return
+}
+
+piece_render_shape :: proc(piece: ^Piece, layout: hex.Layout) {
 	margin := f32(-1)
 	alpha := f32(1)
 
@@ -724,18 +758,19 @@ piece_render_shape :: proc(
 		alpha = unit
 	}
 
-	if piece.state == .Swapping {
-		custom_root := hex.fqdoubled_to_cube(piece.swap_interpolated)
-		corners = hex.fpolygon_corners(layout, custom_root, margin)
-	} else {
-		root := hex.qdoubled_to_cube(piece.coord)
-		corners = hex.polygon_corners(layout, root, margin)
-	}
+	width := f32(10)
+	corners := piece_corners(piece, layout, math.ceil(-1 - width / 2))
+	hexagon_path(corners)
+	oc.set_width(width)
+	color := piece_outer_colors[piece.color_index]
+	oc.set_color_rgba(color.r, color.g, color.b, alpha)
+	oc.stroke()
 
+	corners = piece_corners(piece, layout, margin - width)
 	hexagon_path(corners)
 	piece_set_current_color(piece^, alpha)
-
 	oc.fill()
+
 	return
 }
 
@@ -743,7 +778,7 @@ particles_update :: proc(particles: ^[dynamic]Particle) {
 	// update new
 	for &particle in particles {
 		particle.lifetime_framecount += 1
-		particle.pos += particle.direction * 5
+		particle.pos += particle.direction * 10
 	}
 
 	// remove old
@@ -856,4 +891,17 @@ piece_state_text :: proc(state: Piece_State) -> (result: string) {
 		result = "LAND"
 	}
 	return
+}
+
+piece_can_hang :: proc(grid: []Piece, piece: ^Piece) -> bool {
+	below := coord_below(piece.coord)
+	below_piece := grid_get_any(grid, below)
+
+	if below_piece != nil &&
+	   !below_piece.is_color &&
+	   !piece_at_end(piece.coord) {
+		return true
+	}
+
+	return false
 }

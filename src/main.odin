@@ -177,37 +177,37 @@ game_draw_grid :: proc(game: ^Game_State) {
 			continue
 		}
 
-		corners := piece_render_shape(&x, game.layout)
+		piece_render_shape(&x, game.layout)
 
-		if x.state == .Hang || x.state == .Fall {
-			one := corners[4]
-			two := corners[5]
-			oc.move_to(one.x, one.y + 2)
-			oc.line_to(two.x, two.y + 2)
+		// if x.state == .Hang || x.state == .Fall {
+		// 	one := corners[4]
+		// 	two := corners[5]
+		// 	oc.move_to(one.x, one.y + 2)
+		// 	oc.line_to(two.x, two.y + 2)
 
-			if x.state == .Hang {
-				oc.set_color_rgba(1, 1, 1, 1)
-			} else {
-				oc.set_color_rgba(0, 0, 0, 1)
-			}
-			oc.set_width(2)
-			oc.stroke()
-		}
+		// 	if x.state == .Hang {
+		// 		oc.set_color_rgba(1, 1, 1, 1)
+		// 	} else {
+		// 		oc.set_color_rgba(0, 0, 0, 1)
+		// 	}
+		// 	oc.set_width(2)
+		// 	oc.stroke()
+		// }
 
-		small_font_size := core.font_size - 12
-		xx := corners[4].x
-		yy := corners[4].y + game.hexagon_size / 2 + small_font_size
+		// small_font_size := core.font_size - 12
+		// xx := corners[4].x
+		// yy := corners[4].y + game.hexagon_size / 2 + small_font_size
 
-		state_text := piece_state_text(x.state)
-		hex_text := fmt.tprintf("%s %d", state_text, x.state_framecount)
+		// state_text := piece_state_text(x.state)
+		// hex_text := fmt.tprintf("%s %d", state_text, x.state_framecount)
 
-		oc.set_font(core.font)
-		oc.set_color_rgba(0, 0, 0, 1)
-		oc.set_font_size(small_font_size)
-		oc.text_fill(xx, yy, hex_text)
+		// oc.set_font(core.font)
+		// oc.set_color_rgba(0, 0, 0, 1)
+		// oc.set_font_size(small_font_size)
+		// oc.text_fill(xx, yy, hex_text)
 
-		hex_text = fmt.tprintf("%d %d", x.coord.x, x.coord.y)
-		oc.text_fill(xx, yy + small_font_size, hex_text)
+		// hex_text = fmt.tprintf("%d %d", x.coord.x, x.coord.y)
+		// oc.text_fill(xx, yy + small_font_size, hex_text)
 	}
 
 	for x, i in &game.grid_incoming {
