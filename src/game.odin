@@ -46,7 +46,8 @@ Game_State :: struct {
 	flux:                   ease.Flux_Map(f32),
 
 	// game sizing / layout
-	fixed_yoffset: f32,
+	fixed_yoffset:          f32,
+	fixed_xoffset:          f32,
 	offset:                 oc.vec2,
 	hexagon_size:           f32,
 	layout:                 hex.Layout,
@@ -85,8 +86,8 @@ Game_State :: struct {
 	lost:                   bool,
 
 	// warning for rows close to lose range
-	warn_rows: []bool,
-	warn_framecount: int,
+	warn_rows:              []bool,
+	warn_framecount:        int,
 }
 
 Game_Framecount :: enum {
@@ -181,7 +182,6 @@ Fall_Check :: struct {
 }
 
 game_state_init :: proc(state: ^Game_State) {
-	state.speed = 1
 	state.framecounts = {
 		.Fall        = 0,
 		.Hang        = 30,
@@ -200,14 +200,26 @@ game_state_init :: proc(state: ^Game_State) {
 	state.grid = make([]Piece, GRID_WIDTH * GRID_HEIGHT)
 	state.grid_copy = make([]Piece, GRID_WIDTH * GRID_HEIGHT)
 	state.grid_incoming = make([]int, GRID_WIDTH)
-	grid_init(state.grid)
-	grid_init_incoming(state.grid_incoming)
-	state.spawn_ticks = game_speed_apply(state, .Spawn_Time)
-	state.spawn_speedup = 1
 	state.score_stats = make([dynamic]Score_Stat, 0, 64)
 	state.particles = make([dynamic]Particle, 0, 64)
 	state.flux = ease.flux_init(f32, 64)
 	state.warn_rows = make([]bool, GRID_WIDTH)
+	game_state_reset(state)
+}
+
+game_state_zero :: proc(state: ^Game_State) {
+	mem.zero_slice(state.grid)
+	mem.zero_slice(state.warn_rows)
+	clear(&state.score_stats)
+	clear(&state.particles)
+}
+
+game_state_reset :: proc(state: ^Game_State) {
+	state.speed = 1
+	grid_init(state.grid)
+	grid_init_incoming(state.grid_incoming)
+	state.spawn_ticks = game_speed_apply(state, .Spawn_Time)
+	state.spawn_speedup = 1
 }
 
 game_state_destroy :: proc(state: ^Game_State) {
@@ -999,11 +1011,14 @@ grid_spawn_update :: proc(state: ^Game_State) {
 }
 
 game_update_offset :: proc(game: ^Game_State) {
-	game.offset.x = game.hexagon_size + 10
+	game.fixed_xoffset = 300
+	game.offset.x = game.hexagon_size + 10 + game.fixed_xoffset
 	spawn_unit := game_speed_unit(game, .Spawn_Time, game.spawn_ticks)
 
 	game.fixed_yoffset = game.hexagon_size
-	game.offset.y = -ease.cubic_in(1 - spawn_unit) * game.hexagon_size * 1.75 + game.fixed_yoffset
+	game.offset.y =
+		-ease.cubic_in(1 - spawn_unit) * game.hexagon_size * 1.75 +
+		game.fixed_yoffset
 
 	// game.offset.y = height
 
@@ -1095,7 +1110,7 @@ game_any_top_pieces :: proc(game: ^Game_State) -> bool {
 }
 
 game_warn_update :: proc(game: ^Game_State) {
-	for x in 0..<GRID_WIDTH {
+	for x in 0 ..< GRID_WIDTH {
 		index := xy2i_yoffset(x, 2)
 		piece := game.grid[index]
 		game.warn_rows[x] = piece.is_color && piece.state_framecount == 0

@@ -14,6 +14,12 @@ style_fullsize :: proc() -> (res: Style) {
 	return
 }
 
+style_font :: proc(style: ^Style, font: oc.font) {
+	style.font = font
+	style.mask += {.FONT}
+	return
+}
+
 style_sizex_full :: proc(style: ^Style, value: f32 = 1, relax: f32 = 0) {
 	style.size.x = {
 		kind  = .PARENT,
