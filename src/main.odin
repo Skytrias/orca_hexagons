@@ -196,7 +196,7 @@ game_draw_grid :: proc(game: ^Game_State) {
 
 		small_font_size := core.font_size - 12
 		xx := corners[4].x
-		yy := corners[4].y + game.hexagon_size/2 + small_font_size
+		yy := corners[4].y + game.hexagon_size / 2 + small_font_size
 
 		state_text := piece_state_text(x.state)
 		hex_text := fmt.tprintf("%s %d", state_text, x.state_framecount)
@@ -207,11 +207,7 @@ game_draw_grid :: proc(game: ^Game_State) {
 		oc.text_fill(xx, yy, hex_text)
 
 		hex_text = fmt.tprintf("%d %d", x.coord.x, x.coord.y)
-		oc.text_fill(
-			xx,
-			yy + small_font_size,
-			hex_text,
-		)
+		oc.text_fill(xx, yy + small_font_size, hex_text)
 	}
 
 	for x, i in &game.grid_incoming {
