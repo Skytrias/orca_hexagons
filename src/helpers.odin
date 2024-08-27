@@ -13,7 +13,7 @@ xy2i_yoffset :: proc(x, y: int) -> int {
 	if x % 2 != 0 {
 		y += 1
 	}
-		
+
 	row := y / 2
 	return row * GRID_WIDTH + x
 }
@@ -52,4 +52,8 @@ coord_below :: proc(coord: hex.Doubled_Coord) -> hex.Doubled_Coord {
 
 color_flat :: proc(r, g, b: u8) -> [3]f32 {
 	return {f32(r) / 255, f32(g) / 255, f32(b) / 255}
+}
+
+color_flat_scaled :: proc(r, g, b: u8, scale: f32) -> [3]f32 {
+	return {f32(r) / 255 * scale, f32(g) / 255 * scale, f32(b) / 255 * scale}
 }

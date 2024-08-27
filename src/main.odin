@@ -36,7 +36,7 @@ on_terminate :: proc() {
 
 main :: proc() {
 	oc.window_set_title("orca fun")
-	core.window_size = {750, 750}
+	core.window_size = {1000, 1000}
 	oc.window_set_size(core.window_size)
 
 	core.renderer = oc.canvas_renderer_create()
@@ -77,6 +77,7 @@ update :: proc() {
 	particles_update(&core.game.particles)
 	game_speed_update(&core.game)
 	game_over_update(&core.game)
+	game_warn_update(&core.game)
 	ease.flux_update(&core.game.flux, f64(core.dt))
 }
 
@@ -96,11 +97,19 @@ oc_on_frame_refresh :: proc "c" () {
 	if core.ui_context.lastFrameDuration < 10 {
 		core.dt = min(1, f32(core.ui_context.lastFrameDuration))
 		core.update_accumulator += core.dt
-		//		log.infof("%v %v %v", core.dt, core.update_accumulator, core.ui_context.lastFrameDuration)
 	}
 
 	game_update_offset(&core.game)
 	grid_set_coordinates(&core.game.grid)
+
+	// draw top
+	{
+		oc.move_to(0, core.game.fixed_yoffset)
+		oc.line_to(core.window_size.x, core.game.fixed_yoffset)
+		oc.set_width(1)
+		oc.set_color_rgba(1, 1, 1, 1)
+		oc.stroke()
+	}
 
 	for core.update_accumulator >= TICK_TIME {
 		update()
@@ -203,7 +212,7 @@ game_draw_grid :: proc(game: ^Game_State) {
 
 	spawn_unit := game_speed_unit(game, .Spawn_Time, game.spawn_ticks)
 	margin := (spawn_unit * 0.75) * game.hexagon_size
-	alpha := 1-spawn_unit * 0.75
+	alpha := 1 - spawn_unit * 0.75
 	for x, i in &game.grid_incoming {
 		root := hex.qdoubled_to_cube({i, GRID_HEIGHT + 1})
 		corners := hex.polygon_corners(game.layout, root, -1 - margin)
@@ -275,19 +284,11 @@ game_draw_stats_left :: proc(game: ^Game_State) {
 	oc.text_fill(x, y, text)
 
 	y += core.font_size
-text = fmt.tprintf(
-		"Speed: %.2f : %d",
-		game.speed,
-		game.speed_framecount,
-	)
+	text = fmt.tprintf("Speed: %.2f : %d", game.speed, game.speed_framecount)
 	oc.text_fill(x, y, text)
 
 	y += core.font_size
-text = fmt.tprintf(
-		"GameOver: %v : %d",
-		game.lost,
-		game.lose_framecount,
-	)
+	text = fmt.tprintf("GameOver: %v : %d", game.lost, game.lose_framecount)
 	oc.text_fill(x, y, text)
 }
 

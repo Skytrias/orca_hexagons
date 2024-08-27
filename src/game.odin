@@ -20,8 +20,8 @@ SCORE_DURATION :: time.Second * 2
 SPAWN_SPEEDUP :: 20
 DEBUG_TEXT :: false
 
-GRID_WIDTH :: 12
-GRID_HEIGHT :: 10 * 2
+GRID_WIDTH :: 10
+GRID_HEIGHT :: 12 * 2
 
 SPEED_FRAMES :: 60 * 10
 
@@ -46,22 +46,23 @@ Game_State :: struct {
 	flux:                   ease.Flux_Map(f32),
 
 	// game sizing / layout
+	fixed_yoffset: f32,
 	offset:                 oc.vec2,
 	hexagon_size:           f32,
 	layout:                 hex.Layout,
-	
+
 	// grid data
 	grid:                   []Piece,
 	grid_copy:              []Piece,
 	grid_incoming:          []int,
-	
+
 	// dragging + cursor
 	drag:                   Drag_State,
 	cursor_width:           f32,
-	
+
 	// pretty
 	particles:              [dynamic]Particle,
-	
+
 	// spawning blocks
 	spawn_ticks:            int,
 	spawn_speedup:          int,
@@ -75,13 +76,17 @@ Game_State :: struct {
 	chain_delay_framecount: int,
 
 	// speed of the game, all framecounts should use this
-	speed: f32,
-	speed_framecount: int,
-	framecounts: [Game_Framecount]int,
+	speed:                  f32,
+	speed_framecount:       int,
+	framecounts:            [Game_Framecount]int,
 
 	// game over state
-	lose_framecount: int,
-	lost: bool,
+	lose_framecount:        int,
+	lost:                   bool,
+
+	// warning for rows close to lose range
+	warn_rows: []bool,
+	warn_framecount: int,
 }
 
 Game_Framecount :: enum {
@@ -95,6 +100,7 @@ Game_Framecount :: enum {
 	Spawn_Time,
 	Chain_Delay,
 	Lose,
+	Warn,
 }
 
 Score_Stat :: struct {
@@ -136,6 +142,14 @@ piece_outer_colors := [?][3]f32 {
 	color_flat(53, 2, 165),
 }
 
+piece_warn_colors := [?][3]f32 {
+	color_flat_scaled(97, 0, 0, 0.5),
+	color_flat_scaled(0, 99, 3, 0.5),
+	color_flat_scaled(87, 66, 1, 0.5),
+	color_flat_scaled(2, 120, 120, 0.5),
+	color_flat_scaled(53, 2, 165, 0.5),
+}
+
 Piece :: struct {
 	// Visual coordinate
 	coord:                 hex.Doubled_Coord,
@@ -169,16 +183,17 @@ Fall_Check :: struct {
 game_state_init :: proc(state: ^Game_State) {
 	state.speed = 1
 	state.framecounts = {
-		.Fall = 0,
-		.Hang = 30,
-		.Swap = 10,
-		.Land = 40,
+		.Fall        = 0,
+		.Hang        = 30,
+		.Swap        = 10,
+		.Land        = 40,
 		.Clear_Flash = 120,
 		.Clear_Delay = 30,
-		.Clearing = 40,
-		.Spawn_Time = 60 * 25,
+		.Clearing    = 40,
+		.Spawn_Time  = 60 * 25,
 		.Chain_Delay = 100,
-		.Lose = 1000,
+		.Lose        = 1000,
+		.Warn        = 100,
 	}
 
 	state.hexagon_size = 40
@@ -192,6 +207,7 @@ game_state_init :: proc(state: ^Game_State) {
 	state.score_stats = make([dynamic]Score_Stat, 0, 64)
 	state.particles = make([dynamic]Particle, 0, 64)
 	state.flux = ease.flux_init(f32, 64)
+	state.warn_rows = make([]bool, GRID_WIDTH)
 }
 
 game_state_destroy :: proc(state: ^Game_State) {
@@ -199,6 +215,7 @@ game_state_destroy :: proc(state: ^Game_State) {
 	delete(state.grid)
 	delete(state.grid_copy)
 	delete(state.particles)
+	delete(state.warn_rows)
 }
 
 // initialize the colord at the bottom to not make the beginning
@@ -264,6 +281,7 @@ piece_set_current_color :: proc(game: ^Game_State, piece: Piece, alpha: f32) {
 	color := piece_get_color(piece, alpha)
 	//	a := oc.color { color, .RGB }
 	//	b := oc.color { { 0, 0, 0, 1 }, .RGB }
+	// check for warning color
 
 	if piece.state == .Clear_Flash {
 		color = 1
@@ -274,6 +292,10 @@ piece_set_current_color :: proc(game: ^Game_State, piece: Piece, alpha: f32) {
 	} else if piece.state == .Landing {
 		// color.xyz = piece_outer_colors[piece.color_index]
 		color.a *= 0.5
+	}
+
+	if game.warn_rows[piece.coord.x] {
+		color.xyz = piece_warn_colors[piece.color_index]
 	}
 
 	oc.set_color_rgba(color.r, color.g, color.b, color.a)
@@ -320,7 +342,6 @@ grid_set_coordinates :: proc(grid: ^[]Piece) {
 		x.coord = i2coord(i)
 	}
 }
-
 
 
 grid_update :: proc(state: ^Game_State) {
@@ -437,8 +458,7 @@ grid_update :: proc(state: ^Game_State) {
 			continue
 		}
 
-		if x.state == .Clear_Flash &&
-		   x.state_framecount == clear_flash {
+		if x.state == .Clear_Flash && x.state_framecount == clear_flash {
 			x.state_total =
 				total_clear_count * clear_delay + clearing + clear_flash
 		}
@@ -464,7 +484,8 @@ grid_update :: proc(state: ^Game_State) {
 		if state.chain_count > 0 {
 			state.chain_delay_framecount += 1
 
-			if state.chain_delay_framecount > game_speed_apply(state, .Chain_Delay) {
+			if state.chain_delay_framecount >
+			   game_speed_apply(state, .Chain_Delay) {
 				state.chain_delay_framecount = 0
 				state.chain_count = 0
 			}
@@ -577,7 +598,11 @@ hexagon_path :: proc(corners: [6]hex.Point) {
 	oc.close_path()
 }
 
-piece_enter_state :: proc(game: ^Game_State, piece: ^Piece, state: Piece_State) {
+piece_enter_state :: proc(
+	game: ^Game_State,
+	piece: ^Piece,
+	state: Piece_State,
+) {
 	piece.state_framecount = 0
 	switch state {
 	case .Idle:
@@ -588,7 +613,8 @@ piece_enter_state :: proc(game: ^Game_State, piece: ^Piece, state: Piece_State) 
 	case .Clear_Flash:
 		piece.state_framecount = game_speed_apply(game, .Clear_Flash)
 	case .Clear_Delay:
-		piece.state_framecount = piece.clear_index * game_speed_apply(game, .Clear_Delay)
+		piece.state_framecount =
+			piece.clear_index * game_speed_apply(game, .Clear_Delay)
 	case .Clearing:
 		piece.state_framecount = game_speed_apply(game, .Clearing)
 	case .Swapping:
@@ -637,7 +663,11 @@ piece_exit_state :: proc(piece: ^Piece) {
 	}
 }
 
-piece_set_state :: proc(game: ^Game_State, piece: ^Piece, new_state: Piece_State) {
+piece_set_state :: proc(
+	game: ^Game_State,
+	piece: ^Piece,
+	new_state: Piece_State,
+) {
 	piece_exit_state(piece)
 	piece_enter_state(game, piece, new_state)
 }
@@ -830,7 +860,11 @@ piece_corners :: proc(
 	return
 }
 
-piece_render_shape :: proc(game: ^Game_State, piece: ^Piece, layout: hex.Layout) -> [6]hex.Point {
+piece_render_shape :: proc(
+	game: ^Game_State,
+	piece: ^Piece,
+	layout: hex.Layout,
+) -> [6]hex.Point {
 	margin := f32(-1)
 	alpha := f32(1)
 
@@ -967,8 +1001,11 @@ grid_spawn_update :: proc(state: ^Game_State) {
 game_update_offset :: proc(game: ^Game_State) {
 	game.offset.x = game.hexagon_size + 10
 	spawn_unit := game_speed_unit(game, .Spawn_Time, game.spawn_ticks)
-	
-	game.offset.y = -ease.cubic_in(1-spawn_unit) * game.hexagon_size * 1.75
+
+	game.fixed_yoffset = game.hexagon_size
+	game.offset.y = -ease.cubic_in(1 - spawn_unit) * game.hexagon_size * 1.75 + game.fixed_yoffset
+
+	// game.offset.y = height
 
 	// game.offset.y =
 	// 	game.hexagon_size + 10 + (1 - unit) * -game.hexagon_size * 1.75
@@ -1028,17 +1065,24 @@ game_speed_update :: proc(game: ^Game_State) {
 	}
 }
 
-game_speed_apply :: proc(game: ^Game_State, framecount: Game_Framecount) -> int {
+game_speed_apply :: proc(
+	game: ^Game_State,
+	framecount: Game_Framecount,
+) -> int {
 	return int(math.ceil(f32(game.framecounts[framecount]) / game.speed))
 }
 
-game_speed_unit  :: proc(game: ^Game_State, framecount: Game_Framecount, frames: int) -> f32 {
+game_speed_unit :: proc(
+	game: ^Game_State,
+	framecount: Game_Framecount,
+	frames: int,
+) -> f32 {
 	count := game.framecounts[framecount]
 	return f32(frames) / math.ceil(f32(count) / game.speed)
 }
 
 game_any_top_pieces :: proc(game: ^Game_State) -> bool {
-	for x in 0..<GRID_WIDTH {
+	for x in 0 ..< GRID_WIDTH {
 		index := xy2i_yoffset(x, 0)
 		piece := game.grid[index]
 
@@ -1048,6 +1092,14 @@ game_any_top_pieces :: proc(game: ^Game_State) -> bool {
 	}
 
 	return false
+}
+
+game_warn_update :: proc(game: ^Game_State) {
+	for x in 0..<GRID_WIDTH {
+		index := xy2i_yoffset(x, 2)
+		piece := game.grid[index]
+		game.warn_rows[x] = piece.is_color && piece.state_framecount == 0
+	}
 }
 
 game_over_update :: proc(game: ^Game_State) {
@@ -1067,5 +1119,5 @@ game_over_update :: proc(game: ^Game_State) {
 	} else {
 		game.lost = true
 		game.lose_framecount = 0
-	}	
+	}
 }
