@@ -16,24 +16,14 @@ import "hsluv"
 TICK_RATE :: 120
 TICK_TIME :: 1.0 / TICK_RATE
 
+SCORE_DURATION :: time.Second * 2
+SPAWN_SPEEDUP :: 20
+DEBUG_TEXT :: false
+
 GRID_WIDTH :: 12
 GRID_HEIGHT :: 10 * 2
 
-DEBUG_SPEED :: 1
-
-FALL_FRAMES :: 0 * DEBUG_SPEED
-HANG_FRAMES :: 30 * DEBUG_SPEED
-SWAP_FRAMES :: 10 * DEBUG_SPEED
-LAND_FRAMES :: 40 * DEBUG_SPEED
-CLEAR_FLASH_FRAMES :: 120 * DEBUG_SPEED
-CLEAR_DELAY_FRAMES :: 30 * DEBUG_SPEED
-CLEARING_FRAMES :: 40 * DEBUG_SPEED
-SPAWN_TIME :: 60 * 25 * DEBUG_SPEED
-SCORE_DURATION :: time.Second * 2
-CHAIN_DELAY_FRAMES :: 100 * DEBUG_SPEED
-SPAWN_SPEEDUP :: 20
-
-DEBUG_TEXT :: false
+SPEED_FRAMES :: 60 * 10
 
 Particle :: struct {
 	using pos:           [2]f32,
@@ -71,6 +61,24 @@ Game_State :: struct {
 	// chain tracking
 	chain_count:            int,
 	chain_delay_framecount: int,
+
+	// speed of the game, all framecounts should use this
+	speed: f32,
+	speed_framecount: int,
+
+	framecounts: [Game_Framecount]int,
+}
+
+Game_Framecount :: enum {
+	Fall,
+	Hang,
+	Swap,
+	Land,
+	Clear_Flash,
+	Clear_Delay,
+	Clearing,
+	Spawn_Time,
+	Chain_Delay,
 }
 
 Score_Stat :: struct {
@@ -143,13 +151,26 @@ Fall_Check :: struct {
 }
 
 game_state_init :: proc(state: ^Game_State) {
+	state.speed = 1
+	state.framecounts = {
+		.Fall = 0,
+		.Hang = 30,
+		.Swap = 10,
+		.Land = 40,
+		.Clear_Flash = 120,
+		.Clear_Delay = 30,
+		.Clearing = 40,
+		.Spawn_Time = 60 * 25,
+		.Chain_Delay = 100,
+	}
+
 	state.hexagon_size = 40
 	state.grid = make([]Piece, GRID_WIDTH * GRID_HEIGHT)
 	state.grid_copy = make([]Piece, GRID_WIDTH * GRID_HEIGHT)
 	state.grid_incoming = make([]int, GRID_WIDTH)
 	grid_init(state.grid)
 	grid_init_incoming(state.grid_incoming)
-	state.spawn_ticks = SPAWN_TIME
+	state.spawn_ticks = game_speed_apply(state, .Spawn_Time)
 	state.spawn_speedup = 1
 	state.score_stats = make([dynamic]Score_Stat, 0, 64)
 	state.particles = make([dynamic]Particle, 0, 64)
@@ -222,14 +243,14 @@ piece_get_color :: proc(piece: Piece, alpha: f32) -> [4]f32 {
 	return {color.x, color.y, color.z, alpha}
 }
 
-piece_set_current_color :: proc(piece: Piece, alpha: f32) {
+piece_set_current_color :: proc(game: ^Game_State, piece: Piece, alpha: f32) {
 	color := piece_get_color(piece, alpha)
 	//	a := oc.color { color, .RGB }
 	//	b := oc.color { { 0, 0, 0, 1 }, .RGB }
 
 	if piece.state == .Clear_Flash {
 		color = 1
-		unit := f32(piece.state_framecount) / f32(CLEAR_FLASH_FRAMES)
+		unit := game_speed_unit(game, .Clear_Flash, piece.state_framecount)
 		color.a = math.sin(unit * math.PI * 10)
 	} else if piece.state == .Clear_Delay {
 		color = {0, 0, 0, 1}
@@ -288,7 +309,7 @@ grid_update :: proc(state: ^Game_State) {
 
 	// update all state machines
 	for &x in &state.grid_copy {
-		piece_update(&x, state.grid_copy)
+		piece_update(state, &x, state.grid_copy)
 	}
 
 	// spawn particles
@@ -314,7 +335,7 @@ grid_update :: proc(state: ^Game_State) {
 
 			if b.state == .Fall && b.state_framecount == 0 && !a.is_color {
 				a^, b^ = b^, a^
-				a.state_framecount = FALL_FRAMES
+				a.state_framecount = game_speed_apply(state, .Fall)
 			}
 		}
 	}
@@ -330,10 +351,12 @@ grid_update :: proc(state: ^Game_State) {
 			b := &state.grid_copy[b_index]
 
 			piece_set_state(
+				state,
 				a,
 				piece_can_hang(state.grid_copy, a) ? .Hang : .Idle,
 			)
 			piece_set_state(
+				state,
 				b,
 				piece_can_hang(state.grid_copy, b) ? .Hang : .Idle,
 			)
@@ -365,7 +388,7 @@ grid_update :: proc(state: ^Game_State) {
 
 			any_chains := false
 			for other, i in clear.connections {
-				piece_set_state(other, .Clear_Flash)
+				piece_set_state(state, other, .Clear_Flash)
 				other.clear_index = i + 1 + total_clear_count
 				any_chains |= other.can_chain
 			}
@@ -386,17 +409,19 @@ grid_update :: proc(state: ^Game_State) {
 	}
 
 	// update all just cleared pieces to set the total time to wait
+	// TODO could be problematic
+	clear_flash := game_speed_apply(state, .Clear_Flash)
+	clear_delay := game_speed_apply(state, .Clear_Delay)
+	clearing := game_speed_apply(state, .Clearing)
 	for &x in state.grid_copy {
 		if !x.is_color {
 			continue
 		}
 
 		if x.state == .Clear_Flash &&
-		   x.state_framecount == CLEAR_FLASH_FRAMES {
+		   x.state_framecount == clear_flash {
 			x.state_total =
-				total_clear_count * CLEAR_DELAY_FRAMES +
-				CLEARING_FRAMES +
-				CLEAR_FLASH_FRAMES
+				total_clear_count * clear_delay + clearing + clear_flash
 		}
 	}
 
@@ -420,7 +445,7 @@ grid_update :: proc(state: ^Game_State) {
 		if state.chain_count > 0 {
 			state.chain_delay_framecount += 1
 
-			if state.chain_delay_framecount > CHAIN_DELAY_FRAMES {
+			if state.chain_delay_framecount > game_speed_apply(state, .Chain_Delay) {
 				state.chain_delay_framecount = 0
 				state.chain_count = 0
 			}
@@ -486,7 +511,7 @@ game_mouse_check :: proc(
 
 			a := grid_get_any(state.grid, mouse_root)
 			b := grid_get_any(state.grid, coord)
-			piece_swap(a, b, coord)
+			piece_swap(state, a, b, coord)
 		}
 
 		drag.coord = nil
@@ -533,24 +558,24 @@ hexagon_path :: proc(corners: [6]hex.Point) {
 	oc.close_path()
 }
 
-piece_enter_state :: proc(piece: ^Piece, state: Piece_State) {
+piece_enter_state :: proc(game: ^Game_State, piece: ^Piece, state: Piece_State) {
 	piece.state_framecount = 0
 	switch state {
 	case .Idle:
 	case .Hang:
-		piece.state_framecount = HANG_FRAMES
+		piece.state_framecount = game_speed_apply(game, .Hang)
 	case .Fall:
-		piece.state_framecount = FALL_FRAMES
+		piece.state_framecount = game_speed_apply(game, .Fall)
 	case .Clear_Flash:
-		piece.state_framecount = CLEAR_FLASH_FRAMES
+		piece.state_framecount = game_speed_apply(game, .Clear_Flash)
 	case .Clear_Delay:
-		piece.state_framecount = piece.clear_index * CLEAR_DELAY_FRAMES
+		piece.state_framecount = piece.clear_index * game_speed_apply(game, .Clear_Delay)
 	case .Clearing:
-		piece.state_framecount = CLEARING_FRAMES
+		piece.state_framecount = game_speed_apply(game, .Clearing)
 	case .Swapping:
-		piece.state_framecount = SWAP_FRAMES
+		piece.state_framecount = game_speed_apply(game, .Swap)
 	case .Landing:
-		piece.state_framecount = LAND_FRAMES
+		piece.state_framecount = game_speed_apply(game, .Land)
 	}
 	piece.state = state
 }
@@ -593,9 +618,9 @@ piece_exit_state :: proc(piece: ^Piece) {
 	}
 }
 
-piece_set_state :: proc(piece: ^Piece, new_state: Piece_State) {
+piece_set_state :: proc(game: ^Game_State, piece: ^Piece, new_state: Piece_State) {
 	piece_exit_state(piece)
-	piece_enter_state(piece, new_state)
+	piece_enter_state(game, piece, new_state)
 }
 
 grid_get_color :: proc(grid: []Piece, coord: hex.Doubled_Coord) -> ^Piece {
@@ -633,7 +658,7 @@ piece_at_end :: proc(coord: hex.Doubled_Coord) -> bool {
 	return coord.y == GRID_HEIGHT - 1 || coord.y == GRID_HEIGHT - 2
 }
 
-piece_update :: proc(piece: ^Piece, grid: []Piece) {
+piece_update :: proc(game: ^Game_State, piece: ^Piece, grid: []Piece) {
 	if piece.state_total > 0 {
 		piece.state_total -= 1
 	}
@@ -660,7 +685,7 @@ piece_update :: proc(piece: ^Piece, grid: []Piece) {
 	switch piece.state {
 	case .Idle:
 		if piece_can_hang(grid, piece) {
-			piece_set_state(piece, .Hang)
+			piece_set_state(game, piece, .Hang)
 		}
 
 		piece.can_chain = false
@@ -671,7 +696,7 @@ piece_update :: proc(piece: ^Piece, grid: []Piece) {
 			yoffset = 1
 		}
 
-		piece_set_state(piece, .Fall)
+		piece_set_state(game, piece, .Fall)
 		piece.can_chain = true
 
 		// set upper pieces to fall too
@@ -680,7 +705,7 @@ piece_update :: proc(piece: ^Piece, grid: []Piece) {
 			other := &grid[index]
 
 			if other.is_color && other.state == .Idle {
-				piece_set_state(other, .Fall)
+				piece_set_state(game, other, .Fall)
 				other.can_chain = true
 			} else {
 				break
@@ -692,26 +717,26 @@ piece_update :: proc(piece: ^Piece, grid: []Piece) {
 		below_piece := grid_get_color(grid, below)
 
 		if piece_at_end(piece.coord) {
-			piece_set_state(piece, .Landing)
+			piece_set_state(game, piece, .Landing)
 		}
 
 		if below_piece != nil && !state_falling(below_piece.state) {
-			piece_set_state(piece, .Landing)
+			piece_set_state(game, piece, .Landing)
 		}
 
 	case .Clear_Flash:
-		piece_set_state(piece, .Clear_Delay)
+		piece_set_state(game, piece, .Clear_Delay)
 
 	case .Clear_Delay:
-		piece_set_state(piece, .Clearing)
+		piece_set_state(game, piece, .Clearing)
 
 	case .Clearing:
 
 	case .Landing:
-		piece_set_state(piece, .Idle)
+		piece_set_state(game, piece, .Idle)
 
 	case .Swapping:
-		unit := f32(piece.state_framecount) / SWAP_FRAMES
+		unit := game_speed_unit(game, .Swap, piece.state_framecount)
 		piece.swap_interpolated.x = math.lerp(
 			f32(piece.swap_from.x),
 			f32(piece.swap_to.x),
@@ -750,19 +775,19 @@ piece_swappable :: proc(a, b: ^Piece) -> bool {
 	return true
 }
 
-piece_swap :: proc(a, b: ^Piece, goal: hex.Doubled_Coord) {
+piece_swap :: proc(game: ^Game_State, a, b: ^Piece, goal: hex.Doubled_Coord) {
 	if !piece_swappable(a, b) {
 		return
 	}
 
 	if b != nil {
-		piece_set_state(b, .Swapping)
+		piece_set_state(game, b, .Swapping)
 		b.swap_from = b.coord
 		b.swap_interpolated = {f32(b.swap_from.x), f32(b.swap_from.y)}
 		b.swap_to = a.coord
 	}
 
-	piece_set_state(a, .Swapping)
+	piece_set_state(game, a, .Swapping)
 	a.swap_from = a.coord
 	a.swap_interpolated = {f32(a.swap_from.x), f32(a.swap_from.y)}
 	a.swap_to = goal
@@ -786,12 +811,12 @@ piece_corners :: proc(
 	return
 }
 
-piece_render_shape :: proc(piece: ^Piece, layout: hex.Layout) -> [6]hex.Point {
+piece_render_shape :: proc(game: ^Game_State, piece: ^Piece, layout: hex.Layout) -> [6]hex.Point {
 	margin := f32(-1)
 	alpha := f32(1)
 
 	if piece.state == .Clearing {
-		unit := f32(piece.state_framecount) / CLEARING_FRAMES
+		unit := game_speed_unit(game, .Clearing, piece.state_framecount)
 		margin = -1 + (1 - unit) * -core.game.hexagon_size
 		alpha = unit
 	}
@@ -806,7 +831,7 @@ piece_render_shape :: proc(piece: ^Piece, layout: hex.Layout) -> [6]hex.Point {
 
 	corners = piece_corners(piece, layout, margin - width)
 	hexagon_path(corners)
-	piece_set_current_color(piece^, alpha)
+	piece_set_current_color(game, piece^, alpha)
 	oc.fill()
 
 	return corners
@@ -885,7 +910,7 @@ grid_spawn_update :: proc(state: ^Game_State) {
 			state.spawn_ticks -= 1 * state.spawn_speedup
 		}
 	} else {
-		state.spawn_ticks = SPAWN_TIME
+		state.spawn_ticks = game_speed_apply(state, .Spawn_Time)
 
 		// shift upwards
 		for x in 0 ..< GRID_WIDTH {
@@ -920,14 +945,9 @@ grid_spawn_update :: proc(state: ^Game_State) {
 	}
 }
 
-game_spawn_unit :: proc(game: ^Game_State) -> f32 {
-	return f32(game.spawn_ticks) / f32(SPAWN_TIME)		
-}
-
-
 game_update_offset :: proc(game: ^Game_State) {
 	game.offset.x = game.hexagon_size + 10
-	spawn_unit := game_spawn_unit(game)
+	spawn_unit := game_speed_unit(game, .Spawn_Time, game.spawn_ticks)
 	
 	game.offset.y = -ease.cubic_in(1-spawn_unit) * game.hexagon_size * 1.75
 
@@ -974,4 +994,26 @@ piece_can_hang :: proc(grid: []Piece, piece: ^Piece) -> bool {
 	}
 
 	return false
+}
+
+game_speed_update :: proc(game: ^Game_State) {
+	if grid_any_clears(game.grid) {
+		return
+	}
+
+	if game.speed_framecount < SPEED_FRAMES {
+		game.speed_framecount += 1
+	} else {
+		game.speed += 0.1
+		game.speed_framecount = 0
+	}
+}
+
+game_speed_apply :: proc(game: ^Game_State, framecount: Game_Framecount) -> int {
+	return int(math.ceil(f32(game.framecounts[framecount]) / game.speed))
+}
+
+game_speed_unit  :: proc(game: ^Game_State, framecount: Game_Framecount, frames: int) -> f32 {
+	count := game.framecounts[framecount]
+	return f32(frames) / math.ceil(f32(count) / game.speed)
 }

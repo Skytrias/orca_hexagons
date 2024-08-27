@@ -75,6 +75,7 @@ update :: proc() {
 	grid_update(&core.game)
 	grid_spawn_update(&core.game)
 	particles_update(&core.game.particles)
+	game_speed_update(&core.game)
 	ease.flux_update(&core.game.flux, f64(core.dt))
 }
 
@@ -178,7 +179,7 @@ game_draw_grid :: proc(game: ^Game_State) {
 			continue
 		}
 
-		corners := piece_render_shape(&x, game.layout)
+		corners := piece_render_shape(game, &x, game.layout)
 
 		when DEBUG_TEXT {
 			small_font_size := core.font_size - 12
@@ -199,7 +200,7 @@ game_draw_grid :: proc(game: ^Game_State) {
 		}
 	}
 
-	spawn_unit := ease.cubic_out(game_spawn_unit(game))
+	spawn_unit := game_speed_unit(game, .Spawn_Time, game.spawn_ticks)
 	margin := (spawn_unit * 0.75) * game.hexagon_size
 	alpha := 1-spawn_unit * 0.75
 	for x, i in &game.grid_incoming {
@@ -269,6 +270,14 @@ game_draw_stats_left :: proc(game: ^Game_State) {
 		"CHAIN: %d : %d",
 		game.chain_count,
 		game.chain_delay_framecount,
+	)
+	oc.text_fill(x, y, text)
+
+	y += core.font_size
+text = fmt.tprintf(
+		"Speed: %.2f : %d",
+		game.speed,
+		game.speed_framecount,
 	)
 	oc.text_fill(x, y, text)
 }
