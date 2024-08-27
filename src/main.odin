@@ -100,10 +100,10 @@ oc_on_frame_refresh :: proc "c" () {
 	game_update_offset(&core.game)
 	grid_set_coordinates(&core.game.grid)
 
-	//	for core.update_accumulator >= TICK_TIME {
-	update()
-	//			core.update_accumulator -= TICK_TIME
-	//		}
+	for core.update_accumulator >= TICK_TIME {
+		update()
+		core.update_accumulator -= TICK_TIME
+	}
 
 	key_down := oc.key_down(&core.input, .Q)
 	is_down := oc.mouse_down(&core.input, .LEFT) || key_down
@@ -166,7 +166,8 @@ oc_on_raw_event :: proc "c" (event: ^oc.event) {
 		grid_init(core.game.grid)
 	}
 
-	core.game.spawn_speedup = oc.key_down(&core.input, .SPACE) ? 10 : 1
+	core.game.spawn_speedup =
+		oc.key_down(&core.input, .SPACE) ? SPAWN_SPEEDUP : 1
 }
 
 // ---
@@ -177,7 +178,7 @@ game_draw_grid :: proc(game: ^Game_State) {
 			continue
 		}
 
-		piece_render_shape(&x, game.layout)
+		corners := piece_render_shape(&x, game.layout)
 
 		// if x.state == .Hang || x.state == .Fall {
 		// 	one := corners[4]
@@ -194,20 +195,21 @@ game_draw_grid :: proc(game: ^Game_State) {
 		// 	oc.stroke()
 		// }
 
-		// small_font_size := core.font_size - 12
-		// xx := corners[4].x
-		// yy := corners[4].y + game.hexagon_size / 2 + small_font_size
+		small_font_size := core.font_size - 12
+		xx := corners[4].x - 5
+		yy := corners[4].y + game.hexagon_size / 2
 
-		// state_text := piece_state_text(x.state)
-		// hex_text := fmt.tprintf("%s %d", state_text, x.state_framecount)
+		state_text := piece_state_text(x.state)
+		hex_text := fmt.tprintf("%s %d", state_text, x.state_framecount)
 
-		// oc.set_font(core.font)
-		// oc.set_color_rgba(0, 0, 0, 1)
-		// oc.set_font_size(small_font_size)
-		// oc.text_fill(xx, yy, hex_text)
+		oc.set_font(core.font)
+		oc.set_color_rgba(0, 0, 0, 1)
+		oc.set_font_size(small_font_size)
+		oc.text_fill(xx, yy, hex_text)
 
 		// hex_text = fmt.tprintf("%d %d", x.coord.x, x.coord.y)
-		// oc.text_fill(xx, yy + small_font_size, hex_text)
+		hex_text = fmt.tprintf("%v", x.can_chain)
+		oc.text_fill(xx, yy + small_font_size, hex_text)
 	}
 
 	for x, i in &game.grid_incoming {
@@ -218,16 +220,6 @@ game_draw_grid :: proc(game: ^Game_State) {
 		oc.set_color_rgba(color.r, color.g, color.b, 0.1)
 		oc.fill()
 	}
-}
-
-game_draw_bottom :: proc(game: ^Game_State) {
-	//	for x in -BOUNDS_LIMIT ..= BOUNDS_LIMIT {
-	//		root := hex.qdoubled_to_cube({x, FALL_LIMIT + 1})
-	//		corners := hex.polygon_corners(game.layout, root, 0)
-	//		hexagon_path(corners)
-	//		oc.set_color_rgba(0, 0, 0, 1)
-	//		oc.fill()
-	//	}
 }
 
 draw_cursor :: proc(game: ^Game_State, corners: [6]hex.Point) {
@@ -275,13 +267,19 @@ game_draw_stats_left :: proc(game: ^Game_State) {
 	oc.text_fill(x, y, text)
 
 	y += core.font_size
-
 	text = fmt.tprintf("FPS: %.4f", core.dt)
 	oc.text_fill(x, y, text)
 
 	y += core.font_size
+	text = fmt.tprintf("TICKS SPAWN: %d", game.spawn_ticks)
+	oc.text_fill(x, y, text)
 
-	text = fmt.tprintf("TICKS SPAWN: %d", core.game.spawn_ticks)
+	y += core.font_size
+	text = fmt.tprintf(
+		"CHAIN: %d : %d",
+		game.chain_count,
+		game.chain_delay_framecount,
+	)
 	oc.text_fill(x, y, text)
 }
 

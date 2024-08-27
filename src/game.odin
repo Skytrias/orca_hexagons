@@ -13,7 +13,7 @@ import "core:time"
 import "hex"
 import "hsluv"
 
-TICK_RATE :: 20
+TICK_RATE :: 120
 TICK_TIME :: 1.0 / TICK_RATE
 
 GRID_WIDTH :: 12
@@ -30,12 +30,15 @@ CLEAR_DELAY_FRAMES :: 30 * DEBUG_SPEED
 CLEARING_FRAMES :: 40 * DEBUG_SPEED
 SPAWN_TIME :: 60 * 25 * DEBUG_SPEED
 SCORE_DURATION :: time.Second * 2
+CHAIN_DELAY_FRAMES :: 100 * DEBUG_SPEED
+SPAWN_SPEEDUP :: 20
 
 Particle :: struct {
 	using pos:           [2]f32,
 	direction:           [2]f32,
 	color:               [3]f32,
-	radius:              f32,
+	width:               f32,
+	size:                f32,
 	lifetime_framecount: int,
 	lifetime:            int,
 }
@@ -48,20 +51,24 @@ Drag_State :: struct {
 }
 
 Game_State :: struct {
-	offset:        oc.vec2,
-	hexagon_size:  f32,
-	layout:        hex.Layout,
-	grid:          []Piece,
-	grid_copy:     []Piece,
-	grid_incoming: []int,
-	drag:          Drag_State,
-	particles:     [dynamic]Particle,
-	cursor_width:  f32,
-	spawn_ticks:   int,
-	spawn_speedup: int,
-	score:         int,
-	score_stats:   [dynamic]Score_Stat,
-	flux:          ease.Flux_Map(f32),
+	offset:                 oc.vec2,
+	hexagon_size:           f32,
+	layout:                 hex.Layout,
+	grid:                   []Piece,
+	grid_copy:              []Piece,
+	grid_incoming:          []int,
+	drag:                   Drag_State,
+	particles:              [dynamic]Particle,
+	cursor_width:           f32,
+	spawn_ticks:            int,
+	spawn_speedup:          int,
+	score:                  int,
+	score_stats:            [dynamic]Score_Stat,
+	flux:                   ease.Flux_Map(f32),
+
+	// chain tracking
+	chain_count:            int,
+	chain_delay_framecount: int,
 }
 
 Score_Stat :: struct {
@@ -124,6 +131,7 @@ Piece :: struct {
 	// Clearing
 	clear_index:           int,
 	clear_spawn_particles: bool,
+	can_chain:             bool, // after blocks fall, they can be chained one after another
 }
 
 Fall_Check :: struct {
@@ -352,14 +360,25 @@ grid_update :: proc(state: ^Game_State) {
 
 		grid_check_clear(&clear, &x)
 		if len(clear.connections) > 4 {
-			text := fmt.tprintf("Combo: %dx", len(clear.connections))
-			game_state_score_stats_append(state, text)
 			state.score += len(clear.connections) * 100
 
+			any_chains := false
 			for other, i in clear.connections {
 				piece_set_state(other, .Clear_Flash)
 				other.clear_index = i + 1 + total_clear_count
+				any_chains |= other.can_chain
 			}
+
+			if any_chains {
+				log.info("ADD CHAIN")
+				text := fmt.tprintf("Chain: %dx", state.chain_count + 1)
+				game_state_score_stats_append(state, text)
+				// state.score += len(clear.connections) * 1000
+				state.chain_count += 1
+			}
+
+			text := fmt.tprintf("Combo: %dx", len(clear.connections))
+			game_state_score_stats_append(state, text)
 
 			total_clear_count += len(clear.connections)
 		}
@@ -394,6 +413,18 @@ grid_update :: proc(state: ^Game_State) {
 	// copy back and set coordinates properly
 	copy(state.grid, state.grid_copy)
 	grid_set_coordinates(&state.grid)
+
+	// look to reset chain counts
+	if !grid_any_clears_or_chains(state.grid) {
+		if state.chain_count > 0 {
+			state.chain_delay_framecount += 1
+
+			if state.chain_delay_framecount > CHAIN_DELAY_FRAMES {
+				state.chain_delay_framecount = 0
+				state.chain_count = 0
+			}
+		}
+	}
 }
 
 game_mouse_check :: proc(
@@ -529,17 +560,19 @@ piece_clear_particles :: proc(state: ^Game_State, piece: ^Piece) {
 
 	for i in 0 ..< 20 {
 		direction := [2]f32{rand.float32() * 2 - 1, rand.float32() * 2 - 1}
-		lifetime := rand.int31_max(50)
+		lifetime := rand.int31_max(150)
 
 		color := piece_colors[piece.color_index]
-		size := rand.float32() * 20 + 10
+		width := rand.float32() * 4 + 1
+		size := (rand.float32() * 5 + 5) * 10
 
 		particle := Particle {
 			pos       = center,
 			direction = direction,
 			lifetime  = int(lifetime),
 			color     = color.rgb,
-			radius    = size,
+			width     = width,
+			size      = size,
 		}
 
 		append(&state.particles, particle)
@@ -629,6 +662,8 @@ piece_update :: proc(piece: ^Piece, grid: []Piece) {
 			piece_set_state(piece, .Hang)
 		}
 
+		piece.can_chain = false
+
 	case .Hang:
 		yoffset := 0
 		if piece.coord.x % 2 != 0 {
@@ -636,18 +671,20 @@ piece_update :: proc(piece: ^Piece, grid: []Piece) {
 		}
 
 		piece_set_state(piece, .Fall)
+		piece.can_chain = true
+
+		// set upper pieces to fall too
 		for y := piece.coord.y - 2; y >= 0; y -= 2 {
 			index := xy2i(piece.coord.x, y)
-			a := &grid[index]
+			other := &grid[index]
 
-			if a.is_color && a.state == .Idle {
-				piece_set_state(a, .Fall)
+			if other.is_color && other.state == .Idle {
+				piece_set_state(other, .Fall)
+				other.can_chain = true
 			} else {
 				break
 			}
 		}
-
-	// piece_set_state(piece, .Fall)
 
 	case .Fall:
 		below := coord_below(piece.coord)
@@ -748,7 +785,7 @@ piece_corners :: proc(
 	return
 }
 
-piece_render_shape :: proc(piece: ^Piece, layout: hex.Layout) {
+piece_render_shape :: proc(piece: ^Piece, layout: hex.Layout) -> [6]hex.Point {
 	margin := f32(-1)
 	alpha := f32(1)
 
@@ -771,7 +808,7 @@ piece_render_shape :: proc(piece: ^Piece, layout: hex.Layout) {
 	piece_set_current_color(piece^, alpha)
 	oc.fill()
 
-	return
+	return corners
 }
 
 particles_update :: proc(particles: ^[dynamic]Particle) {
@@ -793,21 +830,45 @@ particles_update :: proc(particles: ^[dynamic]Particle) {
 particles_render :: proc(particles: ^[dynamic]Particle) {
 	for &particle in particles {
 		unit := f32(particle.lifetime_framecount) / f32(particle.lifetime)
-		alpha := (1 - unit * unit)
-		radius := particle.radius * (1 - unit)
+		alpha := (1 - (unit * unit * unit))
+
 		oc.set_color_rgba(
 			particle.color.r,
 			particle.color.g,
 			particle.color.b,
-			alpha,
+			alpha * 0.5,
 		)
-		oc.circle_fill(particle.x, particle.y, radius)
+		xx := particle.x + particle.direction.x * particle.size
+		yy := particle.y + particle.direction.y * particle.size
+
+		oc.set_width(particle.width)
+		oc.move_to(particle.x, particle.y)
+		oc.line_to(xx, yy)
+		oc.stroke()
+		// oc.circle_fill(particle.x, particle.y, radius)
 	}
 }
 
 grid_any_clears :: proc(grid: []Piece) -> bool {
 	for x in grid {
-		if x.state == .Clearing || x.state == .Clear_Flash {
+		if x.state == .Clearing ||
+		   x.state == .Clear_Flash ||
+		   x.state == .Clear_Delay {
+			return true
+		}
+	}
+
+	return false
+}
+
+grid_any_clears_or_chains :: proc(grid: []Piece) -> bool {
+	for x in grid {
+		if x.state == .Clearing ||
+		   x.state == .Clear_Flash ||
+		   x.state == .Clear_Delay ||
+		   x.can_chain ||
+		   x.state == .Hang ||
+		   x.state == .Fall {
 			return true
 		}
 	}
