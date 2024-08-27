@@ -43,20 +43,32 @@ Drag_State :: struct {
 }
 
 Game_State :: struct {
+	flux:                   ease.Flux_Map(f32),
+
+	// game sizing / layout
 	offset:                 oc.vec2,
 	hexagon_size:           f32,
 	layout:                 hex.Layout,
+	
+	// grid data
 	grid:                   []Piece,
 	grid_copy:              []Piece,
 	grid_incoming:          []int,
+	
+	// dragging + cursor
 	drag:                   Drag_State,
-	particles:              [dynamic]Particle,
 	cursor_width:           f32,
+	
+	// pretty
+	particles:              [dynamic]Particle,
+	
+	// spawning blocks
 	spawn_ticks:            int,
 	spawn_speedup:          int,
+
+	// scoring
 	score:                  int,
 	score_stats:            [dynamic]Score_Stat,
-	flux:                   ease.Flux_Map(f32),
 
 	// chain tracking
 	chain_count:            int,
@@ -65,8 +77,11 @@ Game_State :: struct {
 	// speed of the game, all framecounts should use this
 	speed: f32,
 	speed_framecount: int,
-
 	framecounts: [Game_Framecount]int,
+
+	// game over state
+	lose_framecount: int,
+	lost: bool,
 }
 
 Game_Framecount :: enum {
@@ -79,6 +94,7 @@ Game_Framecount :: enum {
 	Clearing,
 	Spawn_Time,
 	Chain_Delay,
+	Lose,
 }
 
 Score_Stat :: struct {
@@ -162,6 +178,7 @@ game_state_init :: proc(state: ^Game_State) {
 		.Clearing = 40,
 		.Spawn_Time = 60 * 25,
 		.Chain_Delay = 100,
+		.Lose = 1000,
 	}
 
 	state.hexagon_size = 40
@@ -303,6 +320,8 @@ grid_set_coordinates :: proc(grid: ^[]Piece) {
 		x.coord = i2coord(i)
 	}
 }
+
+
 
 grid_update :: proc(state: ^Game_State) {
 	copy(state.grid_copy, state.grid)
@@ -1016,4 +1035,37 @@ game_speed_apply :: proc(game: ^Game_State, framecount: Game_Framecount) -> int 
 game_speed_unit  :: proc(game: ^Game_State, framecount: Game_Framecount, frames: int) -> f32 {
 	count := game.framecounts[framecount]
 	return f32(frames) / math.ceil(f32(count) / game.speed)
+}
+
+game_any_top_pieces :: proc(game: ^Game_State) -> bool {
+	for x in 0..<GRID_WIDTH {
+		index := xy2i_yoffset(x, 0)
+		piece := game.grid[index]
+
+		if piece.is_color && piece.state_framecount == 0 {
+			return true
+		}
+	}
+
+	return false
+}
+
+game_over_update :: proc(game: ^Game_State) {
+	if !game_any_top_pieces(game) {
+		game.lose_framecount = 0
+		return
+	}
+
+	if grid_any_clears(game.grid) {
+		game.lose_framecount = 0
+		return
+	}
+
+	if game.lose_framecount < game_speed_apply(game, .Lose) {
+		game.lose_framecount += 1
+		game.spawn_ticks = game_speed_apply(game, .Spawn_Time)
+	} else {
+		game.lost = true
+		game.lose_framecount = 0
+	}	
 }

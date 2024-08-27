@@ -8,6 +8,16 @@ exp_interpolate :: proc(cur: ^f32, nxt, dt, rate: f32) {
 	cur^ += (nxt - cur^) * (1 - math.pow_f32(rate, dt))
 }
 
+xy2i_yoffset :: proc(x, y: int) -> int {
+	y := y
+	if x % 2 != 0 {
+		y += 1
+	}
+		
+	row := y / 2
+	return row * GRID_WIDTH + x
+}
+
 xy2i :: proc(x, y: int) -> int {
 	row := y / 2
 	return row * GRID_WIDTH + x

@@ -76,6 +76,7 @@ update :: proc() {
 	grid_spawn_update(&core.game)
 	particles_update(&core.game.particles)
 	game_speed_update(&core.game)
+	game_over_update(&core.game)
 	ease.flux_update(&core.game.flux, f64(core.dt))
 }
 
@@ -278,6 +279,14 @@ text = fmt.tprintf(
 		"Speed: %.2f : %d",
 		game.speed,
 		game.speed_framecount,
+	)
+	oc.text_fill(x, y, text)
+
+	y += core.font_size
+text = fmt.tprintf(
+		"GameOver: %v : %d",
+		game.lost,
+		game.lose_framecount,
 	)
 	oc.text_fill(x, y, text)
 }
