@@ -180,44 +180,34 @@ game_draw_grid :: proc(game: ^Game_State) {
 
 		corners := piece_render_shape(&x, game.layout)
 
-		// if x.state == .Hang || x.state == .Fall {
-		// 	one := corners[4]
-		// 	two := corners[5]
-		// 	oc.move_to(one.x, one.y + 2)
-		// 	oc.line_to(two.x, two.y + 2)
+		when DEBUG_TEXT {
+			small_font_size := core.font_size - 12
+			xx := corners[4].x - 5
+			yy := corners[4].y + game.hexagon_size / 2
 
-		// 	if x.state == .Hang {
-		// 		oc.set_color_rgba(1, 1, 1, 1)
-		// 	} else {
-		// 		oc.set_color_rgba(0, 0, 0, 1)
-		// 	}
-		// 	oc.set_width(2)
-		// 	oc.stroke()
-		// }
+			state_text := piece_state_text(x.state)
+			hex_text := fmt.tprintf("%s %d", state_text, x.state_framecount)
 
-		small_font_size := core.font_size - 12
-		xx := corners[4].x - 5
-		yy := corners[4].y + game.hexagon_size / 2
+			oc.set_font(core.font)
+			oc.set_color_rgba(0, 0, 0, 1)
+			oc.set_font_size(small_font_size)
+			oc.text_fill(xx, yy, hex_text)
 
-		state_text := piece_state_text(x.state)
-		hex_text := fmt.tprintf("%s %d", state_text, x.state_framecount)
-
-		oc.set_font(core.font)
-		oc.set_color_rgba(0, 0, 0, 1)
-		oc.set_font_size(small_font_size)
-		oc.text_fill(xx, yy, hex_text)
-
-		// hex_text = fmt.tprintf("%d %d", x.coord.x, x.coord.y)
-		hex_text = fmt.tprintf("%v", x.can_chain)
-		oc.text_fill(xx, yy + small_font_size, hex_text)
+			// hex_text = fmt.tprintf("%d %d", x.coord.x, x.coord.y)
+			hex_text = fmt.tprintf("%v", x.can_chain)
+			oc.text_fill(xx, yy + small_font_size, hex_text)
+		}
 	}
 
+	spawn_unit := ease.cubic_out(game_spawn_unit(game))
+	margin := (spawn_unit * 0.75) * game.hexagon_size
+	alpha := 1-spawn_unit * 0.75
 	for x, i in &game.grid_incoming {
 		root := hex.qdoubled_to_cube({i, GRID_HEIGHT + 1})
-		corners := hex.polygon_corners(game.layout, root, -2)
+		corners := hex.polygon_corners(game.layout, root, -1 - margin)
 		hexagon_path(corners)
-		color := piece_colors[x]
-		oc.set_color_rgba(color.r, color.g, color.b, 0.1)
+		color := piece_outer_colors[x]
+		oc.set_color_rgba(color.r, color.g, color.b, alpha)
 		oc.fill()
 	}
 }
@@ -267,7 +257,7 @@ game_draw_stats_left :: proc(game: ^Game_State) {
 	oc.text_fill(x, y, text)
 
 	y += core.font_size
-	text = fmt.tprintf("FPS: %.4f", core.dt)
+	text = fmt.tprintf("DT: %.4f", core.dt)
 	oc.text_fill(x, y, text)
 
 	y += core.font_size

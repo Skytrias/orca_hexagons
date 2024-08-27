@@ -33,6 +33,8 @@ SCORE_DURATION :: time.Second * 2
 CHAIN_DELAY_FRAMES :: 100 * DEBUG_SPEED
 SPAWN_SPEEDUP :: 20
 
+DEBUG_TEXT :: false
+
 Particle :: struct {
 	using pos:           [2]f32,
 	direction:           [2]f32,
@@ -360,7 +362,6 @@ grid_update :: proc(state: ^Game_State) {
 
 		grid_check_clear(&clear, &x)
 		if len(clear.connections) > 4 {
-			state.score += len(clear.connections) * 100
 
 			any_chains := false
 			for other, i in clear.connections {
@@ -370,15 +371,15 @@ grid_update :: proc(state: ^Game_State) {
 			}
 
 			if any_chains {
-				log.info("ADD CHAIN")
+				state.chain_count += 1
 				text := fmt.tprintf("Chain: %dx", state.chain_count + 1)
 				game_state_score_stats_append(state, text)
-				// state.score += len(clear.connections) * 1000
-				state.chain_count += 1
+				state.score += len(clear.connections) * 1000
+			} else {
+				state.score += len(clear.connections) * 100
+				text := fmt.tprintf("Combo: %dx", len(clear.connections))
+				game_state_score_stats_append(state, text)
 			}
-
-			text := fmt.tprintf("Combo: %dx", len(clear.connections))
-			game_state_score_stats_append(state, text)
 
 			total_clear_count += len(clear.connections)
 		}
@@ -919,11 +920,19 @@ grid_spawn_update :: proc(state: ^Game_State) {
 	}
 }
 
+game_spawn_unit :: proc(game: ^Game_State) -> f32 {
+	return f32(game.spawn_ticks) / f32(SPAWN_TIME)		
+}
+
+
 game_update_offset :: proc(game: ^Game_State) {
 	game.offset.x = game.hexagon_size + 10
-	unit := f32(game.spawn_ticks) / f32(SPAWN_TIME)
-	game.offset.y =
-		game.hexagon_size + 10 + (1 - unit) * -game.hexagon_size * 1.75
+	spawn_unit := game_spawn_unit(game)
+	
+	game.offset.y = -ease.cubic_in(1-spawn_unit) * game.hexagon_size * 1.75
+
+	// game.offset.y =
+	// 	game.hexagon_size + 10 + (1 - unit) * -game.hexagon_size * 1.75
 
 	game.layout = hex.Layout {
 		orientation = hex.layout_flat,
