@@ -1,3 +1,4 @@
 /output
 /module.wasm
 /.idea
+*.sublime-workspace
