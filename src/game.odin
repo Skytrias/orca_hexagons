@@ -23,7 +23,7 @@ DEBUG_TEXT :: false
 GRID_WIDTH :: 10
 GRID_HEIGHT :: 12 * 2
 
-SPEED_FRAMES :: 60 * 10
+SPEED_FRAMES :: 60 * 100
 
 Particle :: struct {
 	using pos:           [2]f32,
@@ -217,7 +217,7 @@ game_state_zero :: proc(state: ^Game_State) {
 game_state_reset :: proc(state: ^Game_State) {
 	state.speed = 1
 	grid_init(state.grid)
-	grid_init_incoming(state.grid_incoming)
+	grid_init_incoming(state.grid, state.grid_incoming)
 	state.spawn_ticks = game_speed_apply(state, .Spawn_Time)
 	state.spawn_speedup = 1
 }
@@ -230,20 +230,30 @@ game_state_destroy :: proc(state: ^Game_State) {
 	delete(state.warn_rows)
 }
 
-// initialize the colord at the bottom to not make the beginning
-grid_init_incoming :: proc(grid: []int) {
+// initialize the color at the bottom to not make the beginning
+// ignores lowest color
+grid_init_incoming :: proc(existing: []Piece, grid: []int) {
 	last := -1
-	current := -1
+	
 	for x := 0; x < GRID_WIDTH; x += 1 {
-		last = current
-		current = int(rand.int31_max(len(piece_colors)))
+		current := int(rand.int31_max(len(piece_colors)))
+		piece_index := xy2i_yoffset(x, GRID_HEIGHT - 2)
+		piece := existing[piece_index]
 
-		for last == current {
-			last = current
-			current = int(rand.int31_max(len(piece_colors)))
+		// Ensure the current value is not the same as the last one
+		if x % 2 == 0 {
+			log.info("EVEN", x)
+			for last == current || (piece.is_color && piece.color_index == current) {
+				current = int(rand.int31_max(len(piece_colors)))
+			}
+		} else {
+			for last == current {
+				current = int(rand.int31_max(len(piece_colors)))
+			}
 		}
 
 		grid[x] = current
+		last = current
 	}
 }
 
@@ -505,6 +515,11 @@ grid_update :: proc(state: ^Game_State) {
 	}
 }
 
+coord_out_of_range :: proc(coord: hex.Doubled_Coord) -> bool {
+	yoffset := qdoubled_offset(coord.x)
+	return coord.x < 0 || coord.y < yoffset || coord.x > GRID_WIDTH - 1 || coord.y > GRID_HEIGHT - 1 + yoffset
+}
+
 game_mouse_check :: proc(
 	state: ^Game_State,
 	layout: hex.Layout,
@@ -517,6 +532,17 @@ game_mouse_check :: proc(
 	if mouse_root, ok := drag.coord.?; ok {
 		root := hex.qdoubled_to_cube(mouse_root)
 		fx_snapped = root
+	}
+
+	// clamp mouse coord
+	{
+		mouse_coord := hex.qdoubled_from_cube(fx_snapped)
+		if coord_out_of_range(mouse_coord) {
+			yoffset := qdoubled_offset(mouse_coord.x)
+			mouse_coord.x = clamp(mouse_coord.x, 0, GRID_WIDTH - 1)
+			mouse_coord.y = clamp(mouse_coord.y, yoffset, GRID_HEIGHT - 1 + yoffset)
+			fx_snapped = hex.qdoubled_to_cube(mouse_coord)
+		}
 	}
 
 	exp_interpolate(&drag.cursor.x, f32(fx_snapped.x), core.dt, 1e-9)
@@ -559,11 +585,11 @@ game_mouse_check :: proc(
 			goal := root - direction
 			coord := hex.qdoubled_from_cube(goal)
 
-			// TODO limit range here
-
-			a := grid_get_any(state.grid, mouse_root)
-			b := grid_get_any(state.grid, coord)
-			piece_swap(state, a, b, coord)
+			if !coord_out_of_range(coord) {
+				a := grid_get_any(state.grid, mouse_root)
+				b := grid_get_any(state.grid, coord)
+				piece_swap(state, a, b, coord)
+			}
 		}
 
 		drag.coord = nil
@@ -995,7 +1021,7 @@ grid_spawn_update :: proc(state: ^Game_State) {
 		}
 
 		// update positions
-		grid_init_incoming(state.grid_incoming)
+		grid_init_incoming(state.grid, state.grid_incoming)
 		grid_set_coordinates(&state.grid)
 		game_update_offset(state)
 
@@ -1015,15 +1041,12 @@ game_update_offset :: proc(game: ^Game_State) {
 	game.offset.x = game.hexagon_size + 10 + game.fixed_xoffset
 	spawn_unit := game_speed_unit(game, .Spawn_Time, game.spawn_ticks)
 
-	game.fixed_yoffset = game.hexagon_size
+	game.fixed_yoffset = game.hexagon_size + 50
+		// -ease.cubic_in(1 - spawn_unit) * game.hexagon_size * 1.75 +
 	game.offset.y =
-		-ease.cubic_in(1 - spawn_unit) * game.hexagon_size * 1.75 +
+		-(1 - spawn_unit) * game.hexagon_size * 1.75 +
 		game.fixed_yoffset
 
-	// game.offset.y = height
-
-	// game.offset.y =
-	// 	game.hexagon_size + 10 + (1 - unit) * -game.hexagon_size * 1.75
 
 	game.layout = hex.Layout {
 		orientation = hex.layout_flat,

@@ -82,7 +82,7 @@ oc_on_frame_refresh :: proc "c" () {
 	defer oc.scratch_end(scratch)
 
 	oc.canvas_context_select(core.canvas_context)
-	oc.set_color_rgba(0.1, 0.1, 0.1, 1)
+	oc.set_color_rgba(0.2, 0.2, 0.2, 1)
 	oc.clear()
 
 	if core.ui_context.lastFrameDuration < 10 {
