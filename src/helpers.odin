@@ -9,8 +9,8 @@ exp_interpolate :: proc(cur: ^f32, nxt, dt, rate: f32) {
 }
 
 xy2i_yoffset :: proc(x, y: int) -> int {
-	y := qdoubled_offset(x)
 	row := y / 2
+	y := qdoubled_offset(x)
 	return row * GRID_WIDTH + x
 }
 

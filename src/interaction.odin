@@ -12,6 +12,7 @@ import "core:time"
 import "hex"
 
 update :: proc(game: ^Game_State) {
+	game.total_ticks += 1
 	game_state_score_stats_update(game)
 	grid_update(game)
 	grid_spawn_update(game)
@@ -47,7 +48,7 @@ game_draw_grid :: proc(game: ^Game_State) {
 
 		corners := piece_render_shape(game, &x, game.layout)
 
-		when DEBUG_TEXT {
+		if game.debug_text {
 			small_font_size := core.font_size - 12
 			xx := corners[4].x - 5
 			yy := corners[4].y + game.hexagon_size / 2
@@ -60,8 +61,8 @@ game_draw_grid :: proc(game: ^Game_State) {
 			oc.set_font_size(small_font_size)
 			oc.text_fill(xx, yy, hex_text)
 
-			// hex_text = fmt.tprintf("%d %d", x.coord.x, x.coord.y)
-			hex_text = fmt.tprintf("%v", x.can_chain)
+			hex_text = fmt.tprintf("%d %d", x.coord.x, x.coord.y)
+			// hex_text = fmt.tprintf("%v", x.can_chain)
 			oc.text_fill(xx, yy + small_font_size, hex_text)
 		}
 	}
@@ -177,7 +178,7 @@ ui :: proc(game: ^Game_State) {
 				text = fmt.tprintf(
 					"Speed: %.2f : %d",
 					game.speed,
-					game.speed_framecount,
+					game.speed_last_increase_at,
 				)
 				oc.ui_label_str8(text)
 
@@ -191,6 +192,10 @@ ui :: proc(game: ^Game_State) {
 				if oc.ui_button("reset").clicked {
 					game_state_zero(game)
 					game_state_reset(game)
+				}
+
+				if oc.ui_button("debug").clicked {
+					game.debug_text = !game.debug_text
 				}
 			}
 		}

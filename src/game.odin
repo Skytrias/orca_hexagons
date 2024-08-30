@@ -18,12 +18,10 @@ TICK_TIME :: 1.0 / TICK_RATE
 
 SCORE_DURATION :: time.Second * 2
 SPAWN_SPEEDUP :: 20
-DEBUG_TEXT :: false
 
 GRID_WIDTH :: 10
 GRID_HEIGHT :: 12 * 2
-
-SPEED_FRAMES :: 60 * 100
+BOUNCE_FRAMES :: 80
 
 Particle :: struct {
 	using pos:           [2]f32,
@@ -44,6 +42,7 @@ Drag_State :: struct {
 
 Game_State :: struct {
 	flux:                   ease.Flux_Map(f32),
+	total_ticks:            int,
 
 	// game sizing / layout
 	fixed_yoffset:          f32,
@@ -78,7 +77,7 @@ Game_State :: struct {
 
 	// speed of the game, all framecounts should use this
 	speed:                  f32,
-	speed_framecount:       int,
+	speed_last_increase_at: int,
 	framecounts:            [Game_Framecount]int,
 
 	// game over state
@@ -88,6 +87,9 @@ Game_State :: struct {
 	// warning for rows close to lose range
 	warn_rows:              []bool,
 	warn_framecount:        int,
+
+	// debug
+	debug_text:             bool,
 }
 
 Game_Framecount :: enum {
@@ -186,7 +188,7 @@ game_state_init :: proc(state: ^Game_State) {
 		.Fall        = 0,
 		.Hang        = 30,
 		.Swap        = 10,
-		.Land        = 40,
+		.Land        = 30,
 		.Clear_Flash = 120,
 		.Clear_Delay = 30,
 		.Clearing    = 40,
@@ -234,7 +236,7 @@ game_state_destroy :: proc(state: ^Game_State) {
 // ignores lowest color
 grid_init_incoming :: proc(existing: []Piece, grid: []int) {
 	last := -1
-	
+
 	for x := 0; x < GRID_WIDTH; x += 1 {
 		current := int(rand.int31_max(len(piece_colors)))
 		piece_index := xy2i_yoffset(x, GRID_HEIGHT - 2)
@@ -242,8 +244,8 @@ grid_init_incoming :: proc(existing: []Piece, grid: []int) {
 
 		// Ensure the current value is not the same as the last one
 		if x % 2 == 0 {
-			log.info("EVEN", x)
-			for last == current || (piece.is_color && piece.color_index == current) {
+			for last == current ||
+			    (piece.is_color && piece.color_index == current) {
 				current = int(rand.int31_max(len(piece_colors)))
 			}
 		} else {
@@ -311,9 +313,6 @@ piece_set_current_color :: proc(game: ^Game_State, piece: Piece, alpha: f32) {
 		color.a = math.sin(unit * math.PI * 10)
 	} else if piece.state == .Clear_Delay {
 		color = {0, 0, 0, 1}
-	} else if piece.state == .Landing {
-		// color.xyz = piece_outer_colors[piece.color_index]
-		color.a *= 0.5
 	}
 
 	if game.warn_rows[piece.coord.x] {
@@ -446,7 +445,7 @@ grid_update :: proc(state: ^Game_State) {
 		}
 
 		grid_check_clear(&clear, &x)
-		if len(clear.connections) > 4 {
+		if len(clear.connections) > 5 {
 
 			any_chains := false
 			for other, i in clear.connections {
@@ -517,7 +516,12 @@ grid_update :: proc(state: ^Game_State) {
 
 coord_out_of_range :: proc(coord: hex.Doubled_Coord) -> bool {
 	yoffset := qdoubled_offset(coord.x)
-	return coord.x < 0 || coord.y < yoffset || coord.x > GRID_WIDTH - 1 || coord.y > GRID_HEIGHT - 1 + yoffset
+	return(
+		coord.x < 0 ||
+		coord.y < yoffset ||
+		coord.x > GRID_WIDTH - 1 ||
+		coord.y > GRID_HEIGHT - 1 + yoffset \
+	)
 }
 
 game_mouse_check :: proc(
@@ -540,7 +544,11 @@ game_mouse_check :: proc(
 		if coord_out_of_range(mouse_coord) {
 			yoffset := qdoubled_offset(mouse_coord.x)
 			mouse_coord.x = clamp(mouse_coord.x, 0, GRID_WIDTH - 1)
-			mouse_coord.y = clamp(mouse_coord.y, yoffset, GRID_HEIGHT - 1 + yoffset)
+			mouse_coord.y = clamp(
+				mouse_coord.y,
+				yoffset,
+				GRID_HEIGHT - 1 + yoffset,
+			)
 			fx_snapped = hex.qdoubled_to_cube(mouse_coord)
 		}
 	}
@@ -905,27 +913,54 @@ piece_render_shape :: proc(
 ) -> [6]hex.Point {
 	margin := f32(-1)
 	alpha := f32(1)
+	all_margin := f32(0)
 
-	if piece.state == .Clearing {
+	#partial switch piece.state {
+	case .Clearing:
 		unit := game_speed_unit(game, .Clearing, piece.state_framecount)
 		margin = -1 + (1 - unit) * -core.game.hexagon_size
 		alpha = unit
+
+	// case .Hang:
+	// 	unit := game_speed_unit(game, .Hang, piece.state_framecount)
+	// 	all_margin = -10 * (1-unit)
+
+	// case .Fall:
+	// 	all_margin = -10
+
+	case .Landing:
+		unit := game_speed_unit(game, .Land, piece.state_framecount)
+		actual_unit := ease.sine_in_out(1 - unit)
+		all_margin = -10 * (math.sin(actual_unit * math.PI))
 	}
 
 	width := f32(10)
-	corners := piece_corners(piece, layout, math.ceil(-1 - width / 2))
-	hexagon_path(corners)
-	oc.set_width(width)
+	layout := layout
+
+	// bounce animation when losing
+	if piece.state == .Idle && game.warn_rows[piece.coord.x] {
+		tick_unit := f32(game.total_ticks % BOUNCE_FRAMES) / BOUNCE_FRAMES
+		layout.origin.y -= abs(math.sin(tick_unit * math.PI)) * 10
+	}
+
+	corners_outline := piece_corners(
+		piece,
+		layout,
+		math.ceil(-1 - width / 2) + all_margin,
+	)
+	corners_inner := piece_corners(piece, layout, margin - width + all_margin)
+
+	hexagon_path(corners_outline)
 	color := piece_outer_colors[piece.color_index]
+	oc.set_width(width)
 	oc.set_color_rgba(color.r, color.g, color.b, alpha)
 	oc.stroke()
 
-	corners = piece_corners(piece, layout, margin - width)
-	hexagon_path(corners)
+	hexagon_path(corners_inner)
 	piece_set_current_color(game, piece^, alpha)
 	oc.fill()
 
-	return corners
+	return corners_inner
 }
 
 particles_update :: proc(particles: ^[dynamic]Particle) {
@@ -994,10 +1029,11 @@ grid_any_clears_or_chains :: proc(grid: []Piece) -> bool {
 }
 
 grid_spawn_update :: proc(state: ^Game_State) {
-	any_clears := grid_any_clears(state.grid)
-
 	if state.spawn_ticks > 0 {
-		if !any_clears {
+		any_clears := grid_any_clears(state.grid)
+		any_top := game_any_top_pieces(state)
+
+		if !any_clears && !any_top {
 			state.spawn_ticks -= 1 * state.spawn_speedup
 		}
 	} else {
@@ -1042,10 +1078,9 @@ game_update_offset :: proc(game: ^Game_State) {
 	spawn_unit := game_speed_unit(game, .Spawn_Time, game.spawn_ticks)
 
 	game.fixed_yoffset = game.hexagon_size + 50
-		// -ease.cubic_in(1 - spawn_unit) * game.hexagon_size * 1.75 +
+	// -ease.cubic_in(1 - spawn_unit) * game.hexagon_size * 1.75 +
 	game.offset.y =
-		-(1 - spawn_unit) * game.hexagon_size * 1.75 +
-		game.fixed_yoffset
+		-(1 - spawn_unit) * game.hexagon_size * 1.75 + game.fixed_yoffset
 
 
 	game.layout = hex.Layout {
@@ -1095,11 +1130,10 @@ game_speed_update :: proc(game: ^Game_State) {
 		return
 	}
 
-	if game.speed_framecount < SPEED_FRAMES {
-		game.speed_framecount += 1
-	} else {
+	diff := game.score - game.speed_last_increase_at
+	if diff >= 10_000 {
 		game.speed += 0.1
-		game.speed_framecount = 0
+		game.speed_last_increase_at = game.score
 	}
 }
 
@@ -1134,9 +1168,10 @@ game_any_top_pieces :: proc(game: ^Game_State) -> bool {
 
 game_warn_update :: proc(game: ^Game_State) {
 	for x in 0 ..< GRID_WIDTH {
-		index := xy2i_yoffset(x, 2)
+		offset := qdoubled_offset(x)
+		index := xy2i(x, 2 + offset)
 		piece := game.grid[index]
-		game.warn_rows[x] = piece.is_color && piece.state_framecount == 0
+		game.warn_rows[x] = piece.is_color
 	}
 }
 
@@ -1153,7 +1188,6 @@ game_over_update :: proc(game: ^Game_State) {
 
 	if game.lose_framecount < game_speed_apply(game, .Lose) {
 		game.lose_framecount += 1
-		game.spawn_ticks = game_speed_apply(game, .Spawn_Time)
 	} else {
 		game.lost = true
 		game.lose_framecount = 0
