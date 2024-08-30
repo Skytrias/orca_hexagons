@@ -22,6 +22,7 @@ SPAWN_SPEEDUP :: 20
 GRID_WIDTH :: 10
 GRID_HEIGHT :: 12 * 2
 BOUNCE_FRAMES :: 80
+COMBO_LIMIT :: 4
 
 Particle :: struct {
 	using pos:           [2]f32,
@@ -104,6 +105,7 @@ Game_Framecount :: enum {
 	Chain_Delay,
 	Lose,
 	Warn,
+	Mouse_Hover,
 }
 
 Score_Stat :: struct {
@@ -175,6 +177,9 @@ Piece :: struct {
 	clear_index:           int,
 	clear_spawn_particles: bool,
 	can_chain:             bool, // after blocks fall, they can be chained one after another
+
+	// mouse hovering
+	hover_framecount: int,
 }
 
 Fall_Check :: struct {
@@ -196,6 +201,7 @@ game_state_init :: proc(state: ^Game_State) {
 		.Chain_Delay = 100,
 		.Lose        = 1000,
 		.Warn        = 100,
+		.Mouse_Hover = 100,
 	}
 
 	state.hexagon_size = 40
@@ -445,7 +451,7 @@ grid_update :: proc(state: ^Game_State) {
 		}
 
 		grid_check_clear(&clear, &x)
-		if len(clear.connections) > 5 {
+		if len(clear.connections) > COMBO_LIMIT {
 
 			any_chains := false
 			for other, i in clear.connections {
@@ -550,6 +556,11 @@ game_mouse_check :: proc(
 				GRID_HEIGHT - 1 + yoffset,
 			)
 			fx_snapped = hex.qdoubled_to_cube(mouse_coord)
+		}
+
+		piece := grid_get_color(state.grid, mouse_coord)
+		if piece != nil {
+			piece.hover_framecount = game_speed_apply(state, .Mouse_Hover)
 		}
 	}
 
@@ -758,6 +769,10 @@ piece_update :: proc(game: ^Game_State, piece: ^Piece, grid: []Piece) {
 		piece.state_total -= 1
 	}
 
+	if piece.hover_framecount > 0 {
+		piece.hover_framecount -= 1
+	}
+
 	if piece.state_framecount > 0 {
 		piece.state_framecount -= 1
 
@@ -942,6 +957,12 @@ piece_render_shape :: proc(
 		tick_unit := f32(game.total_ticks % BOUNCE_FRAMES) / BOUNCE_FRAMES
 		layout.origin.y -= abs(math.sin(tick_unit * math.PI)) * 10
 	}
+
+	// unit := game_speed_unit(game, .Mouse_Hover, piece.hover_framecount)
+	// if unit > 0 {
+	// 	width += (unit) * 10
+	// 	// alpha *= (1-unit * 0.75)
+	// }
 
 	corners_outline := piece_corners(
 		piece,

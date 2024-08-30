@@ -65,7 +65,6 @@ main :: proc() {
 
 	game_state_init(&core.game)
 	oc.ui_init(&core.ui_context)
-
 }
 
 @(export)
