@@ -3,3 +3,6 @@
 /.idea
 *.sublime-workspace
 /*.sublime-workspace
+output.app
+module.wasm
+.DS_Store
